@@ -109,6 +109,13 @@
     call(x.tg_action, btn.dataset.action, JSON.stringify(formData(btn)));
   });
 
+  // A list's filter changed (data-change on a select): its action, with
+  // the fields of its form
+  document.addEventListener("change", e => {
+    const el = e.target.closest && e.target.closest("[data-change]");
+    if (el) call(x.tg_action, el.dataset.change, JSON.stringify(formData(el)));
+  });
+
   // Enter in a field presses its form's main button
   document.addEventListener("keydown", e => {
     if (e.key !== "Enter" || e.target.tagName === "TEXTAREA") return;

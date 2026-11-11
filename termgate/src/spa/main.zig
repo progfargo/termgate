@@ -15,10 +15,17 @@ const Form = @import("form.zig").Form;
 
 const login = @import("pages/login.zig");
 const welcome = @import("pages/welcome.zig");
+const user = @import("pages/user.zig");
 
 const routes = [_]router.Route{
     .{ .path = "/login", .handler = login.render, .public = true },
     .{ .path = "/welcome", .handler = welcome.render },
+    .{ .path = "/user", .handler = user.browse },
+    .{ .path = "/user/insert", .handler = user.insert },
+    .{ .path = "/user/update", .handler = user.update },
+    .{ .path = "/user/role", .handler = user.role },
+    .{ .path = "/user/update_pass", .handler = user.updatePass },
+    .{ .path = "/user/delete", .handler = user.delete },
 };
 
 const Action = struct { name: []const u8, run: *const fn (Form) void };
@@ -29,6 +36,16 @@ const actions = [_]Action{
     .{ .name = "loginCode", .run = login.submitCode },
     .{ .name = "loginBack", .run = login.back },
     .{ .name = "logout", .run = login.logout },
+    .{ .name = "copy", .run = user.copy },
+    .{ .name = "userFilter", .run = user.filter },
+    .{ .name = "userInsert", .run = user.submitInsert },
+    .{ .name = "userUpdate", .run = user.submitUpdate },
+    .{ .name = "userRoleGrant", .run = user.submitRoleGrant },
+    .{ .name = "userRoleRevoke", .run = user.submitRoleRevoke },
+    .{ .name = "userUpdatePass", .run = user.submitUpdatePass },
+    .{ .name = "userDelete", .run = user.submitDelete },
+    .{ .name = "userSelect", .run = user.select },
+    .{ .name = "userUnselect", .run = user.unselect },
 };
 
 /// The first page the user may open.

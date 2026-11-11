@@ -47,6 +47,17 @@ pub fn checked(id: []const u8) bool {
     return el.get(bool, "checked") catch false;
 }
 
+/// The first text field of the page's content gets the focus (a page
+/// set as HTML does not follow `autofocus`).
+pub fn focusFirstField() void {
+    const doc = document() orelse return;
+    defer doc.deinit();
+    const el = doc.call(?js.Object, "querySelector", .{js.string("#main-content input[type=text], #main-content input[type=password], #main-content textarea")}) catch return;
+    const e = el orelse return;
+    defer e.deinit();
+    e.call(void, "focus", .{}) catch {};
+}
+
 pub fn focus(id: []const u8) void {
     const el = byId(id) orelse return;
     defer el.deinit();

@@ -68,7 +68,13 @@ pub const Message = struct {
     title: []const u8 = "",
 };
 
+/// The messages of the last answer (replaced by the next call)
 pub var messages: []const Message = &.{};
+
+/// Messages kept for the next page that is shown (after a call that goes
+/// on to another page, which makes calls of its own); shown once
+var pending_arena: std.heap.ArenaAllocator = .init(app.gpa);
+var pending: std.ArrayList(Message) = .empty;
 
 /// Takes the messages of an answer.
 pub fn takeMessages(answer: std.json.Value) void {
@@ -78,13 +84,23 @@ pub fn takeMessages(answer: std.json.Value) void {
     messages = std.json.parseFromValueLeaky([]const Message, app.arena(), list, .{ .ignore_unknown_fields = true }) catch &.{};
 }
 
-/// A message of the page itself (not from the server).
+/// A message of the page itself, shown with the next page drawn.
 pub fn say(kind: []const u8, text: []const u8) void {
-    const lines = app.arena().alloc([]const u8, 1) catch return;
-    lines[0] = text;
-    const one = app.arena().alloc(Message, 1) catch return;
-    one[0] = .{ .type = kind, .lines = lines };
-    messages = one;
+    const a = pending_arena.allocator();
+    const lines = a.alloc([]const u8, 1) catch return;
+    lines[0] = a.dupe(u8, text) catch return;
+    pending.append(a, .{ .type = kind, .lines = lines }) catch {};
+}
+
+/// The last answer's messages are shown with the next page drawn too.
+pub fn keepMessages() void {
+    const a = pending_arena.allocator();
+    for (messages) |m| {
+        const lines = a.alloc([]const u8, m.lines.len) catch return;
+        for (m.lines, lines) |l, *d| d.* = a.dupe(u8, l) catch "";
+        pending.append(a, .{ .name = a.dupe(u8, m.name) catch "", .type = a.dupe(u8, m.type) catch "info", .lines = lines, .title = a.dupe(u8, m.title) catch "" }) catch {};
+    }
+    messages = &.{};
 }
 
 pub fn has(name: []const u8) bool {
@@ -95,19 +111,23 @@ pub fn has(name: []const u8) bool {
 /// Shows the messages in the message area (our earlier project's Msg.Render);
 /// false if there were none. Each can be closed.
 pub fn renderMessages() bool {
-    if (messages.len == 0) {
+    defer {
+        pending = .empty;
+        _ = pending_arena.reset(.retain_capacity);
+    }
+    if (messages.len == 0 and pending.items.len == 0) {
         dom.setHtml("site-message", "");
         return false;
     }
     var b: app.Buf = .{};
     b.raw("<div class=\"row\"><div class=\"col\">");
-    for (messages) |m| {
+    for ([_][]const Message{ pending.items, messages }) |list| for (list) |m| {
         const class = if (std.mem.eql(u8, m.type, "error")) "alert-error" else if (std.mem.eql(u8, m.type, "warning")) "alert-warning" else if (std.mem.eql(u8, m.type, "success")) "alert-success" else "alert-info";
         const title = if (m.title.len > 0) m.title else if (std.mem.eql(u8, m.type, "error")) "Error" else if (std.mem.eql(u8, m.type, "warning")) "Warning" else if (std.mem.eql(u8, m.type, "success")) "Done" else "Note";
         b.add("<div class=\"alert {s}\"><i class=\"fa fa-times button-close\"></i><p><strong>{f}</strong></p>", .{ class, app.esc(title) });
         for (m.lines) |l| b.add("<p>{f}</p>", .{app.esc(l)});
         b.raw("</div>");
-    }
+    };
     b.raw("</div></div>");
     dom.setHtml("site-message", b.str());
     return true;

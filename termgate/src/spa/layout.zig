@@ -113,9 +113,9 @@ fn userInfo() void {
     const u = state.user orelse return;
     var b: app.Buf = .{};
     if (u.real) |real| {
-        b.add("<p><strong>User:</strong> {f} <small>(signed in as {f})</small>", .{ app.esc(u.name), app.esc(real) });
+        b.add("<p><strong>User:</strong> {f}", .{app.esc(u.name)});
         if (u.can_unselect) b.raw(" <a href=\"#\" data-action=\"userUnselect\" class=\"unselect-user\" title=\"Back to myself\"><i class=\"fas fa-times\"></i></a>");
-        b.raw("</p>");
+        b.add("</p><p><small>Signed in as {f}</small></p>", .{app.esc(real)});
     } else {
         b.add("<p><strong>User:</strong> {f}</p>", .{app.esc(u.name)});
     }

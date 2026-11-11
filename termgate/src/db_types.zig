@@ -52,6 +52,8 @@ pub const Session = struct {
     /// Whether it is open now: not stored, termgate knows it (service.zig,
     /// the live sessions)
     open: bool = false,
+    /// Whether its node is connected now (not stored)
+    node_online: bool = false,
 };
 
 /// termgate's settings (Settings panel).

@@ -116,9 +116,9 @@ pub const Service = struct {
     /// When status.req.all was last sent (requestStatus)
     status_asked: std.atomic.Value(i64) = .init(0),
     /// The sessions open now: added when termgate approves one, removed
-    /// when the node reports its end, when the node is no longer connected
-    /// or no longer has it (its status). Not stored: the database keeps when
-    /// each session started and ended.
+    /// when the node reports its end or when the relay no longer has the
+    /// node's subscription to the session's input (syncRelay). Not stored:
+    /// the database keeps when each session started and ended.
     live_lock: Io.Mutex = .init,
     live: std.ArrayList(dbm.Session) = .empty,
 
@@ -165,13 +165,7 @@ pub const Service = struct {
 
         s.sys = try Conn.connect(gpa, io, .{ .host = cfg.relay_host, .port = cfg.relay_port, .key = cfg.system_user, .name = "termgate-system", .tls = tls });
         errdefer s.sys.close();
-        var buf: [2][96]u8 = undefined;
-        const events: [2]*Conn.Sub = .{
-            try s.sys.subscribe(try std.fmt.bufPrint(&buf[0], "$SYS.ACCOUNT.{s}.CONNECT", .{cfg.account})),
-            try s.sys.subscribe(try std.fmt.bufPrint(&buf[1], "$SYS.ACCOUNT.{s}.DISCONNECT", .{cfg.account})),
-        };
-        try s.sys.flush(Conn.seconds(10));
-        try s.tasks.concurrent(io, presenceLoop, .{ s, events });
+        try s.tasks.concurrent(io, presenceLoop, .{s});
         return s;
     }
 
@@ -353,44 +347,38 @@ pub const Service = struct {
         }
     }
 
-    /// Ends the open sessions of nodes that are not connected (`online`:
-    /// the names of those that are); their end time is recorded now.
-    fn liveKeepOnline(s: *Service, a: std.mem.Allocator, online: []const []const u8) void {
-        const Ctx = struct { names: []const []const u8 };
-        const gone = s.liveRemove(a, Ctx{ .names = online }, struct {
+    /// The relay's word on what is open (`open`: the sids whose input a
+    /// connected node is subscribed to): open sessions it does not have are
+    /// over, their end time recorded now. Sessions approved in the last
+    /// seconds are left alone: the node may not have subscribed yet.
+    fn liveSync(s: *Service, a: std.mem.Allocator, open: []const Open) void {
+        const Ctx = struct { open: []const Open, before: i64 };
+        const gone = s.liveRemove(a, Ctx{ .open = open, .before = s.now() - 15 }, struct {
             fn f(c: Ctx, x: dbm.Session) bool {
-                for (c.names) |n| if (std.mem.eql(u8, n, x.node)) return false;
+                if (x.started >= c.before) return false;
+                for (c.open) |o| if (std.mem.eql(u8, o.sid, x.sid)) return false;
                 return true;
             }
         }.f);
         s.recordClosed(gone);
-    }
-
-    /// The node says which sessions it has open (its status): the open
-    /// sessions of the node are those, as far as termgate approved them.
-    fn liveSetNode(s: *Service, a: std.mem.Allocator, node: []const u8, open_now: []const []const u8) void {
-        // A session approved in the last seconds may not be in the node's
-        // list yet
-        const Ctx = struct { node: []const u8, open_now: []const []const u8, before: i64 };
-        const gone = s.liveRemove(a, Ctx{ .node = node, .open_now = open_now, .before = s.now() - 15 }, struct {
-            fn f(c: Ctx, x: dbm.Session) bool {
-                if (!std.mem.eql(u8, x.node, c.node) or x.started >= c.before) return false;
-                for (c.open_now) |sid| if (std.mem.eql(u8, sid, x.sid)) return false;
-                return true;
-            }
-        }.f);
-        s.recordClosed(gone);
-        if (gone.len > 0) log.info("{d} session(s) on {s} closed: the node no longer has them", .{ gone.len, node });
-        // Open on the node but not known open here (termgate's relay
-        // connection was gone for a while): back in, if termgate approved it
-        for (open_now) |sid| {
+        if (gone.len > 0) log.info("{d} session(s) closed without their node's report", .{gone.len});
+        // Open on a node but not known here (termgate's relay connection was
+        // gone for a while): back in, if termgate approved it on that node
+        for (open) |o| {
+            if (s.isLive(o.sid)) continue;
             const rec = blk: {
                 s.lock.lockUncancelable(s.io);
                 defer s.lock.unlock(s.io);
-                break :blk s.db.sessionGet(a, sid) catch null;
+                break :blk s.db.sessionGet(a, o.sid) catch null;
             };
-            if (rec) |r| if (r.ended == null and std.mem.eql(u8, r.node, node)) s.liveAdd(r);
+            if (rec) |r| if (r.ended == null and std.mem.eql(u8, r.node, o.node)) s.liveAdd(r);
         }
+    }
+
+    fn isLive(s: *Service, sid: []const u8) bool {
+        s.live_lock.lockUncancelable(s.io);
+        defer s.live_lock.unlock(s.io);
+        return for (s.live.items) |x| (if (std.mem.eql(u8, x.sid, sid)) break true) else false;
     }
 
     /// The end time of sessions that closed without their node's report.
@@ -410,7 +398,12 @@ pub const Service = struct {
     pub fn kickNode(s: *Service, name: []const u8) void {
         var arena: std.heap.ArenaAllocator = .init(s.gpa);
         defer arena.deinit();
-        s.liveSetNode(arena.allocator(), name, &.{});
+        const Ctx = struct { node: []const u8 };
+        s.recordClosed(s.liveRemove(arena.allocator(), Ctx{ .node = name }, struct {
+            fn f(c: Ctx, x: dbm.Session) bool {
+                return std.mem.eql(u8, c.node, x.node);
+            }
+        }.f));
         s.kickLater(node_prefix, name);
     }
 
@@ -470,43 +463,29 @@ pub const Service = struct {
 
     // --- presence ------------------------------------------------------------
 
-    /// Connection events say that something changed; the relay's connection
-    /// list (CONNZ) says what is connected. A burst of events (relay
-    /// restarted, many nodes reconnecting) leads to one list query a second.
-    fn presenceLoop(s: *Service, events: [2]*Conn.Sub) void {
-        var dirty = true; // the first query finds the nodes already connected
-        var last_sync: i64 = 0;
+    /// Every 5 seconds the relay's connection list (CONNZ) says which
+    /// nodes are connected and, by their subscriptions, which sessions are
+    /// open on them.
+    fn presenceLoop(s: *Service) void {
         while (!s.stopping.load(.acquire)) {
-            for (events) |sub| {
-                const m = sub.next(Conn.millis(100)) catch |e| switch (e) {
-                    error.Timeout => continue,
-                    else => return,
-                };
-                m.deinit(s.gpa);
-                dirty = true;
-            }
-            const t = s.nowMs();
-            if (dirty and t - last_sync >= 1000) {
-                last_sync = t;
-                s.syncOnline() catch |e| switch (e) {
-                    error.Canceled => return,
-                    else => {
-                        log.warn("connection list: {s}", .{@errorName(e)});
-                        continue;
-                    },
-                };
-                dirty = false;
-            }
+            s.syncRelay() catch |e| switch (e) {
+                error.Canceled => return,
+                else => log.warn("connection list: {s}", .{@errorName(e)}),
+            };
+            // Five seconds, in steps that notice a stop
+            var waited: u32 = 0;
+            while (waited < 25 and !s.stopping.load(.acquire)) : (waited += 1)
+                s.io.sleep(.fromMilliseconds(200), .awake) catch return;
         }
     }
 
-    fn nowMs(s: *Service) i64 {
-        return @intCast(@divFloor(Io.Timestamp.now(s.io, .awake).nanoseconds, std.time.ns_per_ms));
-    }
+    /// A session open on a node, as the relay sees it.
+    const Open = struct { node: []const u8, sid: []const u8 };
 
-    /// Reads the account's connections, page by page, and marks the nodes
-    /// among them online.
-    fn syncOnline(s: *Service) !void {
+    /// Reads the account's connections with their subscriptions, page by
+    /// page: the nodes among them are online, and a node subscribed to
+    /// in.<node>.<user>.<sid>.* has that session open.
+    fn syncRelay(s: *Service) !void {
         var arena: std.heap.ArenaAllocator = .init(s.gpa);
         defer arena.deinit();
         const a = arena.allocator();
@@ -514,21 +493,29 @@ pub const Service = struct {
         const Resp = struct {
             data: ?struct {
                 total: usize = 0,
-                connections: []const struct { authorized_user: []const u8 = "" } = &.{},
+                connections: []const struct {
+                    authorized_user: []const u8 = "",
+                    subscriptions_list: []const []const u8 = &.{},
+                } = &.{},
             } = null,
         };
         var names: std.ArrayList([]const u8) = .empty;
+        var open: std.ArrayList(Open) = .empty;
         const page = 1024;
         var offset: usize = 0;
         while (true) {
-            const body = try std.fmt.allocPrint(a, "{{\"auth\":true,\"offset\":{d},\"limit\":{d}}}", .{ offset, page });
+            const body = try std.fmt.allocPrint(a, "{{\"auth\":true,\"subscriptions\":true,\"offset\":{d},\"limit\":{d}}}", .{ offset, page });
             const m = try s.sys.request(subject, body, Conn.seconds(5));
             defer m.deinit(s.gpa);
             const r = try std.json.parseFromSliceLeaky(Resp, a, m.payload, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
             const d = r.data orelse return error.NoConnectionList;
-            for (d.connections) |c|
-                if (std.mem.startsWith(u8, c.authorized_user, node_prefix))
-                    try names.append(a, c.authorized_user[node_prefix.len..]);
+            for (d.connections) |c| {
+                if (!std.mem.startsWith(u8, c.authorized_user, node_prefix)) continue;
+                const node = c.authorized_user[node_prefix.len..];
+                try names.append(a, node);
+                for (c.subscriptions_list) |sub| if (sessionOfSub(node, sub)) |sid|
+                    try open.append(a, .{ .node = node, .sid = sid });
+            }
             offset += d.connections.len;
             if (d.connections.len == 0 or offset >= d.total) break;
         }
@@ -537,8 +524,18 @@ pub const Service = struct {
             defer s.lock.unlock(s.io);
             try s.db.nodeSetOnline(names.items, s.now());
         }
-        // A node no longer connected has no session open
-        s.liveKeepOnline(a, names.items);
+        s.liveSync(a, open.items);
+    }
+
+    /// The sid of a node's subscription in.<node>.<user>.<sid>.*, else null.
+    fn sessionOfSub(node: []const u8, sub: []const u8) ?[]const u8 {
+        var it = std.mem.splitScalar(u8, sub, '.');
+        if (!std.mem.eql(u8, it.next() orelse return null, "in")) return null;
+        if (!std.mem.eql(u8, it.next() orelse return null, node)) return null;
+        _ = it.next() orelse return null;
+        const sid = it.next() orelse return null;
+        if (!std.mem.eql(u8, it.next() orelse return null, "*") or it.next() != null) return null;
+        return sid;
     }
 
     // --- application subjects -----------------------------------------------
@@ -660,7 +657,6 @@ pub const Service = struct {
     /// deleted, forgotten sessions pruned.
     fn housekeeping(s: *Service) void {
         var last_hourly: i64 = 0;
-        var last_reconcile: i64 = 0;
         // Sessions already told they are over the limit
         var expired: std.StringHashMapUnmanaged(void) = .empty;
         defer {
@@ -669,7 +665,7 @@ pub const Service = struct {
             expired.deinit(s.gpa);
         }
         while (!s.stopping.load(.acquire)) {
-            s.housekeep(&expired, &last_hourly, &last_reconcile) catch |e| log.warn("housekeeping: {s}", .{@errorName(e)});
+            s.housekeep(&expired, &last_hourly) catch |e| log.warn("housekeeping: {s}", .{@errorName(e)});
             // Five seconds, in steps that notice a stop
             var waited: u32 = 0;
             while (waited < 25 and !s.stopping.load(.acquire)) : (waited += 1)
@@ -677,7 +673,7 @@ pub const Service = struct {
         }
     }
 
-    fn housekeep(s: *Service, expired: *std.StringHashMapUnmanaged(void), last_hourly: *i64, last_reconcile: *i64) !void {
+    fn housekeep(s: *Service, expired: *std.StringHashMapUnmanaged(void), last_hourly: *i64) !void {
         var arena: std.heap.ArenaAllocator = .init(s.gpa);
         defer arena.deinit();
         const a = arena.allocator();
@@ -689,17 +685,6 @@ pub const Service = struct {
         };
         const active = try s.sessionsOpen(a);
         s.recorder.max_output.store(settings.max_command_output, .release);
-
-        // Once a minute the nodes with open sessions say which they really
-        // have (their status): an end report lost on the way leaves no
-        // session open for ever
-        if (t - last_reconcile.* >= 60) {
-            last_reconcile.* = t;
-            for (active, 0..) |x, i| {
-                const asked = for (active[0..i]) |y| (if (std.mem.eql(u8, x.node, y.node)) break true) else false;
-                if (!asked) s.requestStatusOf(x.node);
-            }
-        }
 
         if (settings.max_session_minutes > 0) {
             const limit = settings.max_session_minutes * 60;
@@ -890,19 +875,10 @@ pub const Service = struct {
     /// status.<node>: system info, sent by the node after connecting and
     /// when asked (status.req.all, status.req.<node>).
     fn recordStatus(s: *Service, m: Conn.Message) !void {
-        var arena: std.heap.ArenaAllocator = .init(s.gpa);
-        defer arena.deinit();
         const node = lastToken(m.subject);
-        // The sessions open on the node now (a tgnode that does not say
-        // leaves them as they are)
-        const Open = struct { sessions: ?[]const []const u8 = null };
-        const open = std.json.parseFromSliceLeaky(Open, arena.allocator(), m.payload, .{ .ignore_unknown_fields = true }) catch Open{};
-        {
-            s.lock.lockUncancelable(s.io);
-            defer s.lock.unlock(s.io);
-            try s.db.nodeRecordStatus(node, m.payload, s.now());
-        }
-        if (open.sessions) |list| s.liveSetNode(arena.allocator(), node, list);
+        s.lock.lockUncancelable(s.io);
+        defer s.lock.unlock(s.io);
+        try s.db.nodeRecordStatus(node, m.payload, s.now());
     }
 };
 
@@ -1038,3 +1014,11 @@ pub const Tap = struct {
         }
     }
 };
+
+test "a node's subscription to a session's input names the session" {
+    try std.testing.expectEqualStrings("S1", Service.sessionOfSub("gw17", "in.gw17.UKEY.S1.*").?);
+    try std.testing.expect(Service.sessionOfSub("gw17", "in.gw18.UKEY.S1.*") == null);
+    try std.testing.expect(Service.sessionOfSub("gw17", "session.open.gw17") == null);
+    try std.testing.expect(Service.sessionOfSub("gw17", "in.gw17.UKEY.S1.data") == null);
+    try std.testing.expect(Service.sessionOfSub("gw17", "in.gw17.>") == null);
+}

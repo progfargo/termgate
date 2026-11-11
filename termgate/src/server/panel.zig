@@ -63,6 +63,14 @@ pub const Panel = struct {
     }
 };
 
+/// Marks the sessions whose node is connected now.
+fn markOnlineFn(p: *Panel, a: std.mem.Allocator, rows: []dbm.Session) !void {
+    p.rpc.lock.lockUncancelable(p.io);
+    defer p.rpc.lock.unlock(p.io);
+    const nodes = try p.rpc.db.nodeList(a);
+    for (rows) |*r| r.node_online = for (nodes) |n| (if (std.mem.eql(u8, n.name, r.node)) break n.online) else false;
+}
+
 pub const Reply = struct { status: std.http.Status = .ok, body: []const u8 };
 
 /// Whether a call changes something, so that it is recorded with who
@@ -203,9 +211,10 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
     defer p.lock.unlock(p.io);
 
     // Sessions: the records from the database, which are open now from the
-    // service (none without the relay)
+    // service (none without the relay), and whether their nodes are online
     if (std.mem.eql(u8, name, "svc.sessionsOpen")) {
-        const list = if (p.service) |sv| try sv.sessionsOpen(a) else &[_]dbm.Session{};
+        const list: []dbm.Session = if (p.service) |sv| try sv.sessionsOpen(a) else &.{};
+        try markOnlineFn(p, a, list);
         return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .ok = list }, .{}) };
     }
     if (std.mem.eql(u8, name, "svc.sessionsSearch")) {
@@ -215,6 +224,7 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
             break :blk try p.rpc.db.sessionsSearch(a, str(args, 0) orelse "", @intCast(int(args, 1) orelse 1));
         };
         if (p.service) |sv| sv.markOpen(@constCast(page.rows));
+        try markOnlineFn(p, a, @constCast(page.rows));
         return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .ok = page }, .{}) };
     }
     if (std.mem.eql(u8, name, "svc.sessionsOfNode")) {
@@ -224,6 +234,7 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
             break :blk try p.rpc.db.sessionsOfNode(a, str(args, 0) orelse return err(.bad_request, "bad arguments"), @intCast(int(args, 1) orelse 20));
         };
         if (p.service) |sv| sv.markOpen(rows);
+        try markOnlineFn(p, a, rows);
         return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .ok = rows }, .{}) };
     }
 

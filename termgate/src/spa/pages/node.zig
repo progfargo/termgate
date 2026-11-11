@@ -56,6 +56,8 @@ pub const Session = struct {
     exit_status: ?i64 = null,
     /// Open now (termgate knows it; not the record)
     open: bool = false,
+    /// Its node connected now
+    node_online: bool = false,
 };
 
 /// A page of the nodes, by a search word

@@ -28,9 +28,6 @@ pub const Status = struct {
     mem_available_kb: u64,
     disk_total_bytes: u64,
     disk_free_bytes: u64,
-    /// The sessions open on the node now (filled in by the agent): termgate
-    /// ends those it still has open but the node does not
-    sessions: []const []const u8 = &.{},
 };
 
 pub const version = "0.0.0";

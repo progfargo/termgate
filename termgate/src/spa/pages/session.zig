@@ -35,8 +35,8 @@ fn table(b: *app.Buf, sessions: []const Session, key: []const u8, open_count: us
     const can_log = state.can("session", "log");
     b.raw("<table>");
     content.caption(b, "{d} sessions · {d} open", .{ total, open_count });
-    b.raw("<thead><tr><th>Node</th><th>User</th><th class=\"center\">Status</th><th>Started</th><th>Ended</th><th class=\"right\">Command</th></tr></thead><tbody>");
-    if (sessions.len == 0) b.raw("<tr><td colspan=\"6\">Empty list.</td></tr>");
+    b.raw("<thead><tr><th>Node name</th><th>User</th><th class=\"center\">Node</th><th class=\"center\">Session</th><th>Started</th><th>Ended</th><th class=\"right\">Command</th></tr></thead><tbody>");
+    if (sessions.len == 0) b.raw("<tr><td colspan=\"7\">Empty list.</td></tr>");
     for (sessions) |s| {
         // Open now: termgate knows it (not the record)
         const open = s.open;
@@ -44,6 +44,8 @@ fn table(b: *app.Buf, sessions: []const Session, key: []const u8, open_count: us
         content.find(b, s.node, key);
         b.raw("</td><td>");
         content.find(b, s.user, key);
+        b.raw("</td><td class=\"center\">");
+        if (s.node_online) content.label(b, "success", "online") else content.label(b, "default", "offline");
         b.raw("</td><td class=\"center\">");
         if (open) content.label(b, "success", "open") else content.label(b, "default", "ended");
         b.add("</td><td>{s}</td><td>{s}", .{ content.dateTime(s.started), if (s.ended) |e| content.dateTime(e) else "-" });
@@ -108,15 +110,51 @@ pub fn browse(query: []const u8) void {
     state.setExternalUrl(c.makeUrl("/session", &cg_names));
     const key = c.str("key");
     content.search("sessionSearch", key);
-    const open = list("session/browse", "[]");
-    const recent = if (fetch.post("session/recent", .{ key, @max(1, c.int("pn")) })) |ans| fetch.fieldAs(content.Page(Session), ans, "data") orelse content.Page(Session){} else content.Page(Session){};
+    const t = tableNow(key, c.int("pn"));
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Sessions", "" }});
     content.contentStart(&b);
-    table(&b, recent.rows, key, open.len, recent.total);
+    b.add("<div id=\"session-table\">{s}</div>", .{t.html});
     content.contentEnd(&b);
-    content.ruler(&b, recent.pages, recent.page, "sessionGoPage");
+    content.ruler(&b, t.pages, t.page, "sessionGoPage");
     content.show(&b);
+    if (!app.waiting) remember(t.html);
+}
+
+/// The table as termgate has it now: open sessions and the page of all.
+fn tableNow(key: []const u8, pn: i64) struct { html: []const u8, pages: i64 = 1, page: i64 = 1 } {
+    const open = list("session/browse", "[]");
+    const recent = if (fetch.post("session/recent", .{ key, @max(1, pn) })) |ans| fetch.fieldAs(content.Page(Session), ans, "data") orelse content.Page(Session){} else content.Page(Session){};
+    var b: app.Buf = .{};
+    table(&b, recent.rows, key, open.len, recent.total);
+    return .{ .html = b.str(), .pages = recent.pages, .page = recent.page };
+}
+
+// The table last shown, and when the list was last asked
+var shown: []u8 = &.{};
+var asked: i64 = 0;
+
+fn remember(html: []const u8) void {
+    app.gpa.free(shown);
+    shown = app.gpa.dupe(u8, html) catch &.{};
+    asked = app.now();
+}
+
+/// Whether the list on the screen is due a fresh look (every 5 seconds).
+pub fn tickDue() bool {
+    return app.now() - asked >= 5 and dom.exists("session-table");
+}
+
+/// The open/online state changes without F5: the table is asked again
+/// and redrawn when it changed.
+pub fn tick() void {
+    const c = cargo();
+    const t = tableNow(c.str("key"), c.int("pn"));
+    if (app.waiting) return;
+    asked = app.now();
+    if (std.mem.eql(u8, t.html, shown)) return;
+    dom.setHtml("session-table", t.html);
+    remember(t.html);
 }
 
 pub fn end(f: Form) void {

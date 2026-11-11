@@ -182,16 +182,25 @@ fn routeRun(path: []const u8, _: []const u8) void {
     router.navigate(path);
 }
 
-/// Four times a second: a watched session's new output (one request at
-/// a time).
+/// Four times a second: a watched session's new output; every 5 seconds
+/// the sessions list's state (one request at a time).
 export fn tg_tick() void {
-    if (!watch.watching() or fetch.busy(.tick)) return;
-    app.beginEvent();
-    fetch.start(.tick, tickRun, "", "");
+    if (fetch.busy(.tick)) return;
+    if (watch.watching()) {
+        app.beginEvent();
+        fetch.start(.tick, tickRun, "", "");
+    } else if (session.tickDue()) {
+        app.beginEvent();
+        fetch.start(.tick, sessionTickRun, "", "");
+    }
 }
 
 fn tickRun(_: []const u8, _: []const u8) void {
     watch.tick();
+}
+
+fn sessionTickRun(_: []const u8, _: []const u8) void {
+    session.tick();
 }
 
 /// An element with data-action was clicked; `form` is the JSON of its

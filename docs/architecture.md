@@ -127,7 +127,7 @@ If termgate is not running, the connection is refused ("termgate is offline"). T
 - Not encrypted: window sizes and the end of a session (no content), and subjects (who talks to which node, when, how much).
 
 **Monitoring**
-- Which sessions are open is known live, not stored: termgate keeps them in memory. A session is added when termgate approves it, and removed when the node reports its end, when the node is no longer connected, or when the node no longer has it: once a minute termgate asks each node with open sessions for its status, which lists the sessions open on it (sessions approved in the last 15 s are left alone, the node may not list them yet). After a restart the list starts empty: the relay restarts with termgate and no session survives it. The database keeps only when each session started and ended (`sessionStart`, `sessionEnd`); a session that closed without its node's report gets its end time when termgate removes it, and those of the last run when termgate starts.
+- Which sessions are open is known live, not stored: termgate keeps them in memory. A session is added when termgate approves it, and removed when the node reports its end or when the relay says it is no longer open. The relay knows: while a session is open its node is subscribed to the session's input (`in.<node>.<user>.<sid>.*`), and the subscription is gone when the session ends or the node disconnects. Every 5 s termgate reads the relay's connection list with subscriptions (`$SYS.REQ.ACCOUNT.APP.CONNZ`); nodes are not asked (sessions approved in the last 15 s are left alone, the node may not have subscribed yet). After a restart the list starts empty: the relay restarts with termgate and no session survives it. The database keeps only when each session started and ended (`sessionStart`, `sessionEnd`); a session that closed without its node's report gets its end time when termgate removes it, and those of the last run when termgate starts.
 - Watching a session (read-only): termgate subscribes to `out.<node>.<user>.<sid>.*` and `in.<node>.<user>.<sid>.resize`, decrypts them and keeps them for the watching page, which feeds them into a libghostty-vt screen in the browser. It shows what happens from the moment watching starts; nothing is sent to the node and nodes do nothing extra.
 
 **Session logs**
@@ -141,7 +141,7 @@ If termgate is not running, the connection is refused ("termgate is offline"). T
 - Sessions are recorded while termgate runs; one open before termgate started is recorded from then on.
 
 **Node status (asset management)**
-- No heartbeat: a node stays connected to the relay, so online means connected. termgate's system connection follows `$SYS.ACCOUNT.APP.CONNECT` / `DISCONNECT`; on any event (at most once a second) and at start it reads the account's connection list (`$SYS.REQ.ACCOUNT.APP.CONNZ`) and marks the nodes in it online. A node going offline keeps that moment as last seen. Without the relay connection termgate shows every node offline.
+- No heartbeat: a node stays connected to the relay, so online means connected. Every 5 s termgate's system connection reads the account's connection list (`$SYS.REQ.ACCOUNT.APP.CONNZ`, the same query that finds the open sessions) and marks the nodes in it online. A node going offline keeps that moment as last seen. Without the relay connection termgate shows every node offline.
 - The callout names connections `node:<name>` and `user:<key>` so a user never passes for a node in that list. termgate closes connections by these names (`$SYS.REQ.SERVER.<id>.KICK`).
 - When a node is cut off its open sessions are marked ended in the audit, since it cannot report them; the sessions of a user who may not connect any more are ended on the nodes, which report them as usual.
 - System info: tgnode publishes `status.<node>` once after connecting and whenever asked (`status.req.<node>`, `status.req.all`); termgate asks all nodes when the Nodes page is opened, at most every 30 s. termgate stores the latest in SQLite.
@@ -156,7 +156,7 @@ If termgate is not running, the connection is refused ("termgate is offline"). T
 | `$SYS.REQ.USER.AUTH` | nats-server (auth callout) | termgate |
 | `ca.get` | anyone (request) | termgate: the CA certificate |
 | `register.<token id>` | tgnode during registration (request) | termgate: pending / approved |
-| `$SYS.ACCOUNT.APP.CONNECT`, `.DISCONNECT`, `$SYS.REQ.ACCOUNT.APP.CONNZ` | nats-server | termgate (system user): who is online |
+| `$SYS.REQ.ACCOUNT.APP.CONNZ` | nats-server | termgate (system user): which nodes are online, which sessions are open |
 | `status.<node>` | tgnode, after connecting and when asked: system info | termgate |
 | `status.req.<node>`, `status.req.all` | termgate | tgnode |
 | `session.open.<node>` | tgterm (request) | tgnode (reply to the requester's inbox) |
@@ -238,7 +238,7 @@ Each binary builds on its own with its own `build.zig` and `build.zig.zon`, and 
 - No sign-up page: users are created by a user with the right, who hands over the generated password (`termgate init` prints the superuser's). No "forgot password" either: an admin resets the user, which gets a new password and sets up its second step again; the reset is recorded in the audit. There is no reset on the server (no command for it), so a password never changes without a record: a customer keeps more than one admin.
 - termgate sends no e-mail to anyone: no mail server to configure. Access keys and node keys are shown in the panel and handed over by the admin.
 - Nodes page: a table of nodes with state (online/offline, waiting for approval, disabled), last seen and system info (OS, architecture, CPUs, memory, disk, tgnode version), and the counts on the right. A node's page: connection (online, last seen, hardware key, added), full system info with a Refresh button (`status.req.<node>`, also sent when the page opens), its open sessions (with End) and its last sessions, and Disable/Enable, New node key, Delete.
-- Sessions page: the open sessions with Watch (read-only), Log and End, and all sessions, searched and paged. Watching a session shows its terminal; End ends it on the node, and the page stays with the last screen.
+- Sessions page: all sessions, searched and paged, with node (online/offline) and session (open/ended) state, which the page asks again every 5 s and shows without a reload; an open one has Watch (read-only) and End, each has Log. Watching a session shows its terminal; End ends it on the node, and the page stays with the last screen.
 - Audit page: what users did in the panel: every changing call and every sign-in, failed ones included, with who, when, what (the node or user it was about) and whether it was done or denied. Recorded on the server for every changing call, whatever the page does.
 - Configuration page: the relay (address, CA fingerprint), the session settings (max command output, max session length, keep session logs) and the ruler length (page numbers on each side of the current one, 2 to 10, our earlier project's rulerLen).
 

@@ -7,6 +7,8 @@
 //!   tgnode id                 print this node's public key (from the hardware)
 //!   tgnode status             print the system info sent to termgate
 //!   tgnode run                serve sessions
+//!   tgnode service            install and start the systemd service that
+//!                             runs "tgnode run" in this folder (root)
 //!   tgnode --node-key <node key>
 //!                             first run: register with termgate, store the
 //!                             config once the admin approves, then serve
@@ -21,6 +23,7 @@ const pty = @import("pty.zig");
 const config = @import("config.zig");
 const agent = @import("agent.zig");
 const register = @import("register.zig");
+const systemd = @import("systemd.zig");
 
 const usage =
     \\usage: tgnode <command>
@@ -29,6 +32,8 @@ const usage =
     \\  id                 print this node's public key
     \\  status             print the system info sent to termgate
     \\  run                serve sessions
+    \\  service            install and start the systemd service (root):
+    \\                     "tgnode run" in this folder, at boot and after a stop
     \\  --node-key <node key>
     \\                     first run: register with termgate, then serve
     \\
@@ -58,6 +63,30 @@ pub fn main(init: std.process.Init) !void {
         try std.json.Stringify.value(s, .{ .whitespace = .indent_2 }, out);
         try out.writeAll("\n");
         try out.flush();
+        return;
+    }
+    if (args.len == 2 and std.mem.eql(u8, args[1], "service")) {
+        // Only a registered node: its node.json in this folder
+        _ = std.Io.Dir.cwd().statFile(io, config.file_name, .{}) catch {
+            std.debug.print("tgnode: no {s} here; register first: tgnode --node-key <node key>\n", .{config.file_name});
+            std.process.exit(1);
+        };
+        var self_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const self_n = std.process.executablePath(io, &self_buf) catch 0;
+        var dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const dir_n = std.process.currentPath(io, &dir_buf) catch 0;
+        if (self_n == 0 or dir_n == 0) {
+            std.debug.print("tgnode: cannot find its own path or this folder\n", .{});
+            std.process.exit(1);
+        }
+        systemd.install(init.gpa, io, .{ .tgnode = self_buf[0..self_n], .dir = dir_buf[0..dir_n] }) catch |e| {
+            std.debug.print("tgnode: {s}\n", .{switch (e) {
+                error.AccessDenied => "permission denied: run as root",
+                else => @errorName(e),
+            }});
+            std.process.exit(1);
+        };
+        std.debug.print("tgnode: service installed and started ({s}); see: systemctl status tgnode\n", .{systemd.unit_path});
         return;
     }
     if (args.len == 2 and std.mem.eql(u8, args[1], "run")) {
@@ -100,5 +129,6 @@ test {
     _ = config;
     _ = agent;
     _ = register;
+    _ = systemd;
     _ = core;
 }

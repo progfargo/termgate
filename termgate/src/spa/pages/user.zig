@@ -530,7 +530,6 @@ fn renderTerminal(form: KeyForm) void {
     var b: app.Buf = .{};
     recordHeader(&b, u, .terminal, "Access Key");
     content.contentStart(&b);
-    b.raw("<p>Terminal access: this user connects with tgterm, like ssh, to its nodes (Edit). It also needs a role with the right terminal:connect (such as terminal_user).</p>");
     if (u.terminal) |t| {
         b.raw("<table><tbody><tr><th class=\"fixed-middle\">State:</th><td>");
         terminalLabel(&b, t);

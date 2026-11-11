@@ -40,6 +40,40 @@ const routes = [_]Route{
     .{ .path = "role/right_update", .call = "roles.rights" },
     // Profile
     .{ .path = "profile/update_pass", .call = "profile.password" },
+    // Nodes (panel.zig, rpc.zig: the database calls take their arguments
+    // as a JSON array)
+    .{ .path = "node/browse", .call = "db.nodeList" },
+    .{ .path = "node/get", .call = "db.nodeGet" },
+    .{ .path = "node/insert", .call = "nodes.create" },
+    .{ .path = "node/new_key", .call = "nodes.newKey" },
+    .{ .path = "node/approve", .call = "db.nodeApprove" },
+    .{ .path = "node/reject", .call = "db.nodeReject" },
+    .{ .path = "node/set_disabled", .call = "db.nodeSetDisabled" },
+    .{ .path = "node/delete", .call = "db.nodeDelete" },
+    .{ .path = "node/kick", .call = "svc.kickNode" },
+    .{ .path = "node/status", .call = "svc.requestStatusOf" },
+    .{ .path = "node/status_all", .call = "svc.requestStatus" },
+    .{ .path = "node/sessions", .call = "db.sessionsOfNode" },
+    // People: terminal access
+    .{ .path = "person/browse", .call = "db.personList" },
+    .{ .path = "person/get", .call = "db.personGet" },
+    .{ .path = "person/invite", .call = "people.invite" },
+    .{ .path = "person/revoke", .call = "db.personRevoke" },
+    .{ .path = "person/kick", .call = "svc.kickUser" },
+    // Sessions
+    .{ .path = "session/browse", .call = "db.sessionsActive" },
+    .{ .path = "session/recent", .call = "db.sessionsRecent" },
+    .{ .path = "session/end", .call = "svc.endSession" },
+    .{ .path = "session/log", .call = "log.commands" },
+    .{ .path = "session/watch_start", .call = "watch.start" },
+    .{ .path = "session/watch_read", .call = "watch.read" },
+    .{ .path = "session/watch_stop", .call = "watch.stop" },
+    // Audit
+    .{ .path = "audit/browse", .call = "db.actionsRecent" },
+    // Configuration
+    .{ .path = "config/browse", .call = "db.settingsGet" },
+    .{ .path = "config/update", .call = "db.settingsSet" },
+    .{ .path = "config/relay", .call = "relay.info" },
 };
 
 /// The call a panel path stands for; null if it is not one.

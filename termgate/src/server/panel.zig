@@ -9,6 +9,7 @@
 const std = @import("std");
 const Io = std.Io;
 const dbm = @import("db");
+const core = @import("core");
 const service_mod = @import("service");
 const rpc_mod = @import("rpc.zig");
 const Caller = @import("auth.zig").Caller;
@@ -68,7 +69,7 @@ pub const Reply = struct { status: std.http.Status = .ok, body: []const u8 };
 /// made it (see record).
 pub fn changes(name: []const u8) bool {
     if (rpc_mod.changes(name)) return true;
-    inline for (.{ "svc.endSession", "svc.kickNode", "svc.kickUser", "users.create", "users.update", "users.reset", "users.delete", "users.grant", "users.revoke", "users.select", "users.unselect", "roles.insert", "roles.update", "roles.rights", "roles.delete", "profile.password" }) |n| {
+    inline for (.{ "svc.endSession", "svc.kickNode", "svc.kickUser", "users.create", "users.update", "users.reset", "users.delete", "users.grant", "users.revoke", "users.select", "users.unselect", "nodes.create", "nodes.newKey", "people.invite", "roles.insert", "roles.update", "roles.rights", "roles.delete", "profile.password" }) |n| {
         if (std.mem.eql(u8, name, n)) return true;
     }
     return false;
@@ -84,6 +85,7 @@ pub fn describe(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const
         // users.* and roles.*: {"id": ..., "name": ..., "role": ..., ...}.
         // The name is the one given, or looked up by the id.
         const is_role = std.mem.startsWith(u8, name, "roles.");
+        const is_node = std.mem.startsWith(u8, name, "nodes.");
         const id: ?i64 = if (v.object.get("id")) |n| (if (n == .integer) n.integer else null) else null;
         var who: []const u8 = if (v.object.get("name")) |n| (if (n == .string) n.string else "") else "";
         var role: []const u8 = "";
@@ -91,7 +93,9 @@ pub fn describe(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const
             p.rpc.lock.lockUncancelable(p.io);
             defer p.rpc.lock.unlock(p.io);
             if (id) |i| {
-                if (is_role) {
+                if (is_node) {
+                    if (p.rpc.db.nodeGet(a, i) catch null) |n| who = n.name;
+                } else if (is_role) {
                     if (p.rpc.db.roleGet(a, i) catch null) |r| who = if (who.len == 0 or std.mem.eql(u8, who, r.name)) r.name else (std.fmt.allocPrint(a, "{s} -> {s}", .{ r.name, who }) catch who);
                 } else if (p.rpc.db.userGet(a, i) catch null) |u| who = if (who.len == 0 or std.mem.eql(u8, who, u.name)) u.name else (std.fmt.allocPrint(a, "{s} -> {s}", .{ u.name, who }) catch who);
                 if (who.len == 0) who = std.fmt.allocPrint(a, "id {d}", .{i}) catch "";
@@ -148,6 +152,8 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
         .forbidden => err(.forbidden, "no right"),
         .bad_request => err(.bad_request, "bad arguments"),
     };
+    if (std.mem.eql(u8, name, "nodes.create") or std.mem.eql(u8, name, "nodes.newKey") or std.mem.eql(u8, name, "people.invite"))
+        return try keyCall(p, a, name, body, who, now);
     if (std.mem.eql(u8, name, "relay.info")) {
         return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .ok = .{
             .host = p.relay_host,
@@ -242,6 +248,67 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
     return null;
 }
 
+/// A node key lasts this long unless used
+const node_key_lifetime_s = 24 * 3600;
+/// An invitation lasts this long unless used
+const invitation_lifetime_s = 7 * 86400;
+
+/// nodes.create {name, description}, nodes.newKey {id}, people.invite
+/// {name, bot, nodes: [...], run_as, uses, days}: a node key or an
+/// invitation, made here: a random token, of which only the hash is
+/// stored; the text (tg1-<relay>-<CA fingerprint>-<token>) is answered
+/// once, to be handed over.
+fn keyCall(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8, who: *const Caller, now: i64) !Reply {
+    const invite = std.mem.eql(u8, name, "people.invite");
+    if (!(if (invite) who.can("user", "access") else who.can("node", "insert"))) return err(.forbidden, "no right");
+    const Req = struct {
+        id: i64 = 0,
+        name: []const u8 = "",
+        description: []const u8 = "",
+        bot: bool = false,
+        nodes: []const []const u8 = &.{},
+        run_as: []const u8 = "",
+        uses: ?u32 = null,
+        days: ?u32 = null,
+    };
+    const req = std.json.parseFromSliceLeaky(Req, a, body, .{ .ignore_unknown_fields = true }) catch return err(.bad_request, "bad arguments");
+
+    var tok: [32]u8 = undefined;
+    p.io.random(&tok);
+    const text = try core.code.format(a, p.relay_host, p.relay_port, p.ca_fingerprint, tok);
+    const th = dbm.tokenHash((core.code.parse(text) catch return error.InvalidCode).token);
+    const answer = struct {
+        fn ok(al: std.mem.Allocator, id: i64, code: []const u8) !Reply {
+            return .{ .body = try std.json.Stringify.valueAlloc(al, .{ .ok = .{ .id = id, .code = code } }, .{}) };
+        }
+        fn dbErr(al: std.mem.Allocator, e: anyerror) !Reply {
+            return .{ .body = try std.json.Stringify.valueAlloc(al, .{ .err = @errorName(e) }, .{}) };
+        }
+    };
+
+    p.rpc.lock.lockUncancelable(p.io);
+    defer p.rpc.lock.unlock(p.io);
+    const db = p.rpc.db;
+    if (std.mem.eql(u8, name, "nodes.create")) {
+        const id = db.nodeCreate(std.mem.trim(u8, req.name, " "), std.mem.trim(u8, req.description, " "), &th, now + node_key_lifetime_s, now) catch |e| return answer.dbErr(a, e);
+        return answer.ok(a, id, text);
+    }
+    if (std.mem.eql(u8, name, "nodes.newKey")) {
+        db.nodeNewToken(req.id, &th, now + node_key_lifetime_s) catch |e| return answer.dbErr(a, e);
+        return answer.ok(a, req.id, text);
+    }
+    if (req.uses == null and req.days == null) return .{ .body = "{\"err\":\"InvalidSpec\"}" };
+    const id = db.personInvite(.{
+        .name = std.mem.trim(u8, req.name, " "),
+        .kind = if (req.bot) .bot else .human,
+        .nodes = std.mem.join(a, ",", req.nodes) catch return error.OutOfMemory,
+        .run_as = std.mem.trim(u8, req.run_as, " "),
+        .max_uses = req.uses,
+        .grant_exp = if (req.days) |d| now + @as(i64, d) * 86400 else null,
+    }, &th, now + invitation_lifetime_s, now) catch |e| return answer.dbErr(a, e);
+    return answer.ok(a, id, text);
+}
+
 test "changing calls are known and described in words" {
     const testing = std.testing;
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -281,4 +348,35 @@ test "changing calls are known and described in words" {
     try testing.expectEqualStrings("ghost", list[0].detail);
     try testing.expect(!list[0].ok);
     try testing.expectEqualStrings("admin", list[1].user);
+}
+
+test "node keys and invitations are made on the server" {
+    const testing = std.testing;
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var db = try dbm.Db.open(":memory:");
+    defer db.close();
+    db.setLogKey(testing.io, @splat(7));
+    var lock: Io.Mutex = .init;
+    var p: Panel = .{ .gpa = testing.allocator, .io = testing.io, .rpc = .{ .io = testing.io, .db = &db, .lock = &lock }, .relay_host = "relay.example", .relay_port = 4222, .ca_fingerprint = @splat(5) };
+    defer p.deinit();
+    const admin: *const Caller = &.{ .id = 1, .name = "admin", .is_superuser = true };
+    const reader: *const Caller = &.{ .id = 2, .name = "reader", .rights = &.{"node:browse"} };
+
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&p, a, "nodes.create", "{\"name\":\"gw01\"}", reader, 1000)).?.status);
+    const made = (try call(&p, a, "nodes.create", "{\"name\":\"gw01\",\"description\":\"pump\"}", admin, 1000)).?;
+    const Answer = struct { ok: struct { id: i64, code: []const u8 } };
+    const ans = try std.json.parseFromSliceLeaky(Answer, a, made.body, .{});
+    // The code names the relay; the database has only its token's hash
+    const code = try core.code.parse(ans.ok.code);
+    try testing.expectEqualStrings("relay.example", code.host);
+    try testing.expectEqual(ans.ok.id, (try db.nodeByToken(a, &dbm.tokenHash(code.token), 1000)).?.id);
+    try testing.expectEqualStrings("{\"err\":\"Duplicate\"}", (try call(&p, a, "nodes.create", "{\"name\":\"gw01\"}", admin, 1000)).?.body);
+
+    // An invitation needs uses, days or both
+    try testing.expectEqualStrings("{\"err\":\"InvalidSpec\"}", (try call(&p, a, "people.invite", "{\"name\":\"Ali\",\"nodes\":[\"gw*\"],\"run_as\":\"root\"}", admin, 1000)).?.body);
+    const inv = try std.json.parseFromSliceLeaky(Answer, a, (try call(&p, a, "people.invite", "{\"name\":\"Ali\",\"nodes\":[\"gw*\",\"pump?\"],\"run_as\":\"root\",\"uses\":2}", admin, 1000)).?.body, .{});
+    const person = (try db.personByToken(a, &dbm.tokenHash((try core.code.parse(inv.ok.code)).token), 1000)).?;
+    try testing.expectEqualStrings("gw*,pump?", person.nodes);
 }

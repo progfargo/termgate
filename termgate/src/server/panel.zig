@@ -69,7 +69,7 @@ pub const Reply = struct { status: std.http.Status = .ok, body: []const u8 };
 /// made it (see record).
 pub fn changes(name: []const u8) bool {
     if (rpc_mod.changes(name)) return true;
-    inline for (.{ "svc.endSession", "svc.kickNode", "svc.kickUser", "users.create", "users.update", "users.reset", "users.delete", "users.grant", "users.revoke", "users.select", "users.unselect", "nodes.create", "nodes.newKey", "terminal.invite", "terminal.revoke", "roles.insert", "roles.update", "roles.rights", "roles.delete", "profile.password" }) |n| {
+    inline for (.{ "svc.endSession", "svc.kickNode", "users.create", "users.update", "users.reset", "users.delete", "users.grant", "users.revoke", "users.select", "users.unselect", "nodes.create", "nodes.newKey", "terminal.invite", "terminal.revoke", "roles.insert", "roles.update", "roles.rights", "roles.delete", "profile.password" }) |n| {
         if (std.mem.eql(u8, name, n)) return true;
     }
     return false;
@@ -180,8 +180,6 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
         who.can("session", "end")
     else if (std.mem.eql(u8, name, "svc.kickNode"))
         who.can("node", "update") or who.can("node", "delete")
-    else if (std.mem.eql(u8, name, "svc.kickUser"))
-        who.can("user", "access")
     else
         return null;
     if (!allowed) return err(.forbidden, "no right");
@@ -220,10 +218,6 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
         }
         if (std.mem.eql(u8, what, "kickNode")) {
             s.kickNode(str(args, 0) orelse return err(.bad_request, "bad arguments"));
-            return ok;
-        }
-        if (std.mem.eql(u8, what, "kickUser")) {
-            s.kickUser(str(args, 0) orelse return err(.bad_request, "bad arguments"));
             return ok;
         }
         return null;
@@ -348,7 +342,7 @@ test "changing calls are known and described in words" {
     defer p.deinit();
 
     try testing.expect(changes("db.nodeDelete") and changes("svc.endSession") and changes("users.create"));
-    try testing.expect(!changes("db.nodeList") and !changes("watch.start") and !changes("users.list") and !changes("svc.requestStatus"));
+    try testing.expect(!changes("db.nodeSearch") and !changes("watch.start") and !changes("users.list") and !changes("svc.requestStatus"));
 
     const th = dbm.tokenHash("T");
     const id = try db.nodeCreate("pump07", "", &th, 2000, 1000);
@@ -356,7 +350,7 @@ test "changing calls are known and described in words" {
     // Looked up before the call: the name is known although the node goes
     try testing.expectEqualStrings("pump07", describe(&p, a, "db.nodeDelete", "[1]"));
     try testing.expectEqualStrings("id 9", describe(&p, a, "db.nodeDelete", "[9]"));
-    try testing.expectEqualStrings("gw02", describe(&p, a, "db.nodeCreate", "[\"gw02\",\"\",\"h\",1,1]"));
+    try testing.expectEqualStrings("gw02", describe(&p, a, "nodes.create", "{\"name\":\"gw02\"}"));
     try testing.expectEqualStrings("session S1 on pump07", describe(&p, a, "svc.endSession", "[\"pump07\",\"UKEY\",\"S1\"]"));
     try testing.expectEqualStrings("veli", describe(&p, a, "users.create", "{\"name\":\"veli\"}"));
     const uid = try db.userCreate("veli", false, "h", 1);

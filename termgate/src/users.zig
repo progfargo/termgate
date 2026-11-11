@@ -16,15 +16,6 @@ const HmacSha1 = std.crypto.auth.hmac.HmacSha1;
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const b64 = std.base64.url_safe_no_pad;
 
-pub const Role = enum {
-    /// Everything
-    admin,
-    /// Reads only: nodes, people, sessions, logs, watching
-    auditor,
-};
-
-pub const min_password = 10;
-
 /// Argon2id cost for passwords: OWASP's recommendation (19 MiB, 2 passes,
 /// 1 lane), fast enough that signing in does not keep anyone waiting.
 pub const Cost = struct { t: u32, m: u32, p: u24 };

@@ -211,6 +211,8 @@ fn login(auth: *Auth, a: std.mem.Allocator, body: []const u8, now: i64) !Reply {
     const token = try a.dupe(u8, &users.newToken(auth.io));
     auth.lock.lockUncancelable(auth.io);
     defer auth.lock.unlock(auth.io);
+    // Expired browser sessions go at each sign-in
+    try auth.db.webSessionsPrune(now);
     try auth.db.webSessionCreate(&users.tokenHash(token), acc.id, now, now + pending_s);
     if (!auth.second_step) {
         // Built without the second step: signed in with the password

@@ -78,14 +78,6 @@ pub fn addClass(id: []const u8, class: []const u8) void {
     classList(id, "add", class);
 }
 
-pub fn removeClass(id: []const u8, class: []const u8) void {
-    classList(id, "remove", class);
-}
-
-pub fn toggleClass(id: []const u8, class: []const u8) void {
-    classList(id, "toggle", class);
-}
-
 fn classList(id: []const u8, op: []const u8, class: []const u8) void {
     const el = byId(id) orelse return;
     defer el.deinit();
@@ -101,12 +93,6 @@ pub fn setBodyId(id: []const u8) void {
     const body = doc.get(js.Object, "body") catch return;
     defer body.deinit();
     body.set("id", js.string(id)) catch {};
-}
-
-pub fn setTitle(text: []const u8) void {
-    const doc = document() orelse return;
-    defer doc.deinit();
-    doc.set("title", js.string(text)) catch {};
 }
 
 /// Goes to `path` ("/user"): the hash changes and the page follows it.

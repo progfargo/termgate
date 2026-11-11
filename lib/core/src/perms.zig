@@ -22,7 +22,7 @@ pub fn node(arena: std.mem.Allocator, name: []const u8) !jwt.UserNats {
     return .{ .@"pub" = .{ .allow = pubs }, .sub = .{ .allow = subs }, .resp = .{ .max = 1 } };
 }
 
-/// A person or bot, by their public key ("U...").
+/// A user or bot, by their public key ("U...").
 pub fn user(arena: std.mem.Allocator, key: []const u8) !jwt.UserNats {
     const pubs = try arena.alloc([]const u8, 4);
     pubs[0] = "session.open.*";

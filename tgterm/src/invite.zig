@@ -5,7 +5,7 @@
 //!    (core.bootstrap.fetchCa); nothing secret is sent before that.
 //! 3. Connect, verifying the relay, with the invitation's token as auth token,
 //!    and send the public key to invite.<token id>. termgate binds the key to
-//!    the person, uses up the token and answers with the grant.
+//!    the user, uses up the token and answers with the grant.
 //! 4. Return the profile to store.
 
 const std = @import("std");

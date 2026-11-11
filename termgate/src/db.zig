@@ -1,5 +1,6 @@
-//! termgate's data (SQLite): nodes and their registration, people and their
-//! invitations, grants with use counts, sessions (audit).
+//! termgate's data (SQLite): nodes and their registration, users with
+//! their roles and terminal access, grants with use counts, sessions and
+//! their logs, the panel's audit.
 //!
 //! termgate is the authority: the relay keeps no state, and nodes and users
 //! hold no credentials besides their own keys. Every decision termgate makes
@@ -7,8 +8,8 @@
 //!
 //! Read functions allocate the strings of their results with the allocator
 //! they get; callers usually pass an arena and free everything at once.
-//! SQLite is built serialized (SQLITE_THREADSAFE=1): the UI and the relay
-//! service use one connection from different threads.
+//! SQLite is built serialized (SQLITE_THREADSAFE=1): the panel's server and
+//! the relay service use one connection from different threads.
 
 const std = @import("std");
 const c = @import("c");
@@ -116,8 +117,6 @@ pub const Db = struct {
             \\    online INTEGER NOT NULL DEFAULT 0
             \\)
         );
-        // Databases from before the online column (fails when it exists)
-        db.exec("ALTER TABLE node ADD COLUMN online INTEGER NOT NULL DEFAULT 0") catch {};
         try db.exec(
             \\CREATE TABLE IF NOT EXISTS setting (
             \\    name TEXT PRIMARY KEY,
@@ -150,8 +149,6 @@ pub const Db = struct {
             \\    effectiveUserId INTEGER REFERENCES user(userId) ON DELETE SET NULL
             \\)
         );
-        if (!try db.has("select 1 from pragma_table_info('webSession') where name = 'effectiveUserId'"))
-            try db.exec("ALTER TABLE webSession ADD COLUMN effectiveUserId INTEGER REFERENCES user(userId) ON DELETE SET NULL");
         // Roles, the rights of each (module and action, see rights.zig) and
         // the roles of each user
         const first_roles = !try db.has("select 1 from sqlite_master where type = 'table' and name = 'role'");
@@ -179,37 +176,6 @@ pub const Db = struct {
         );
         try db.exec("CREATE INDEX IF NOT EXISTS userRoleRole ON userRole(roleId)");
         if (first_roles) try db.seedRoles();
-        // Databases from before roles: users had a fixed role, admin or
-        // auditor. The first admin becomes the superuser, the others get
-        // the role of that name.
-        if (try db.has("select 1 from pragma_table_info('user') where name = 'role'")) {
-            db.exec("ALTER TABLE user ADD COLUMN isSuperuser INTEGER NOT NULL DEFAULT 0") catch {};
-            try db.exec("update user set isSuperuser = 1 where userId = (select min(userId) from user where role = 'admin')");
-            try db.exec("insert or ignore into userRole(userId, roleId) select u.userId, r.roleId from user u join role r on r.name = u.role");
-            try db.exec("ALTER TABLE user DROP COLUMN role");
-        }
-        // Rights from before they were split as in our earlier project: user:roles
-        // was seeing, giving and taking roles; role:update also changed the
-        // rights; user:update also reset passwords. Each role keeps what it
-        // could do, every role may change its own password, and the role
-        // admin gets every right there is.
-        if (try db.has("select 1 from roleRight where module = 'user' and action = 'roles'")) {
-            try db.begin();
-            errdefer db.rollback();
-            inline for (.{ "role_browse", "role_grant", "role_revoke" }) |act|
-                try db.exec("insert or ignore into roleRight(roleId, module, action) select roleId, 'user', '" ++ act ++ "' from roleRight where module = 'user' and action = 'roles'");
-            try db.exec("insert or ignore into roleRight(roleId, module, action) select roleId, 'role', 'role_right' from roleRight where module = 'role' and action = 'update'");
-            try db.exec("insert or ignore into roleRight(roleId, module, action) select roleId, 'user', 'update_pass' from roleRight where module = 'user' and action = 'update'");
-            try db.exec("insert or ignore into roleRight(roleId, module, action) select roleId, 'profile', 'browse' from role");
-            try db.exec("insert or ignore into roleRight(roleId, module, action) select roleId, 'profile', 'update_password' from role");
-            inline for (rights.modules) |m| {
-                if (comptime std.mem.eql(u8, m.name, "terminal")) continue;
-                inline for (m.actions) |ac|
-                    try db.exec("insert or ignore into roleRight(roleId, module, action) select roleId, '" ++ m.name ++ "', '" ++ ac.name ++ "' from role where name = 'admin'");
-            }
-            try db.exec("delete from roleRight where module = 'user' and action = 'roles'");
-            try db.commit();
-        }
         // A user's terminal access: the grant spec chosen by an admin when
         // giving it, and the user's key once the invitation is used
         try db.exec(
@@ -228,20 +194,17 @@ pub const Db = struct {
             \\)
         );
         // The grants termgate issued, with their uses
-        if (!try db.has("select 1 from sqlite_master where type = 'table' and name = 'grantRecord'")) try db.exec(grant_record_table);
-        // Version 1: signing in to the panel and connecting to nodes are
-        // rights. Before, every user could sign in: every role there is
-        // gets panel:login (first, so that terminal_user, made next, does
-        // not), and a role terminal_user gives terminal:connect.
-        if (first_roles) {
-            try db.exec("PRAGMA user_version = 1");
-        } else if (try db.version() < 1) {
-            try db.exec("insert or ignore into roleRight(roleId, module, action) select roleId, 'panel', 'login' from role");
-            try db.seedTerminalRole();
-            try db.exec("PRAGMA user_version = 1");
-        }
-        // Databases from before one kind of user: people become users
-        if (try db.has("select 1 from sqlite_master where type = 'table' and name = 'person'")) try db.migratePeople();
+        try db.exec(
+            \\CREATE TABLE IF NOT EXISTS grantRecord (
+            \\    jti TEXT PRIMARY KEY,
+            \\    userId INTEGER NOT NULL REFERENCES user(userId) ON DELETE CASCADE,
+            \\    token TEXT NOT NULL,
+            \\    maxUses INTEGER,
+            \\    uses INTEGER NOT NULL DEFAULT 0,
+            \\    exp INTEGER,
+            \\    revoked INTEGER NOT NULL DEFAULT 0
+            \\)
+        );
         // What panel users did: every changing call and every sign-in
         try db.exec(
             \\CREATE TABLE IF NOT EXISTS action (
@@ -281,101 +244,12 @@ pub const Db = struct {
             \\    keys BLOB
             \\)
         );
-        // Databases from before end-to-end encryption (fails when it exists)
-        db.exec("ALTER TABLE session ADD COLUMN keys BLOB") catch {};
-        // Databases from before one kind of user
-        if (try db.has("select 1 from pragma_table_info('session') where name = 'personName'"))
-            try db.exec("ALTER TABLE session RENAME COLUMN personName TO userName");
-    }
-
-    const grant_record_table =
-        \\CREATE TABLE grantRecord (
-        \\    jti TEXT PRIMARY KEY,
-        \\    userId INTEGER NOT NULL REFERENCES user(userId) ON DELETE CASCADE,
-        \\    token TEXT NOT NULL,
-        \\    maxUses INTEGER,
-        \\    uses INTEGER NOT NULL DEFAULT 0,
-        \\    exp INTEGER,
-        \\    revoked INTEGER NOT NULL DEFAULT 0
-        \\)
-    ;
-
-    /// The database's version (PRAGMA user_version): one-time migrations.
-    fn version(db: *Db) Error!i64 {
-        var st = try Stmt.prepare(db, "PRAGMA user_version");
-        defer st.finalize();
-        _ = try st.step();
-        return st.int(0);
     }
 
     /// The role terminal_user: connecting to nodes with tgterm.
     fn seedTerminalRole(db: *Db) Error!void {
         try db.exec("insert or ignore into role(name, description) values('terminal_user', 'Connects to nodes with tgterm; which nodes and as whom is set per user.')");
         try db.exec("insert or ignore into roleRight(roleId, module, action) select roleId, 'terminal', 'connect' from role where name = 'terminal_user'");
-    }
-
-    /// Each person of an older database becomes a user: named from the
-    /// person's name as user names go (lowercase, unique), with no password
-    /// (it cannot sign in to the panel), the role terminal_user, and the
-    /// person's access as its terminal access; the grants follow.
-    fn migratePeople(db: *Db) Error!void {
-        try db.begin();
-        errdefer db.rollback();
-        try db.exec("CREATE TEMP TABLE personUser (personId INTEGER PRIMARY KEY, userId INTEGER NOT NULL)");
-        try db.seedTerminalRole();
-        {
-            var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-            defer arena.deinit();
-            const a = arena.allocator();
-            var people: std.ArrayList(struct { id: i64, name: []const u8, created: i64, revoked: bool }) = .empty;
-            {
-                var st = try Stmt.prepare(db, "select personId, name, created, revoked from person order by personId");
-                defer st.finalize();
-                while (try st.step()) try people.append(a, .{ .id = st.int(0), .name = try st.text(a, 1), .created = st.int(2), .revoked = st.int(3) != 0 });
-            }
-            for (people.items) |p| {
-                const base = try userNameFrom(a, p.name);
-                var name = base;
-                var n: usize = 2;
-                while (try db.userNameTaken(name)) : (n += 1) name = try std.fmt.allocPrint(a, "{s}_{d}", .{ base[0..@min(base.len, 28)], n });
-                // "!" is no password hash: nothing signs in with it
-                const uid = db.userCreate(name, false, "!", p.created) catch return error.SqliteError;
-                var st = try Stmt.prepare(db, "insert into personUser(personId, userId) values(?, ?)");
-                defer st.finalize();
-                try st.bindInt(1, p.id);
-                try st.bindInt(2, uid);
-                try st.done();
-                if (!p.revoked) {
-                    var g = try Stmt.prepare(db, "insert or ignore into userRole(userId, roleId) select ?, roleId from role where name = 'terminal_user'");
-                    defer g.finalize();
-                    try g.bindInt(1, uid);
-                    try g.done();
-                }
-            }
-        }
-        try db.exec(
-            \\insert into terminal(userId, kind, userKey, tokenHash, tokenExpires, nodes, runAs, maxUses, grantExp, revoked, created)
-            \\select m.userId, p.kind, p.userKey, p.tokenHash, p.tokenExpires, p.nodes, p.runAs, p.maxUses, p.grantExp, p.revoked, p.created
-            \\from person p join personUser m on m.personId = p.personId
-        );
-        try db.exec("ALTER TABLE grantRecord RENAME TO grantRecordOld");
-        try db.exec(grant_record_table);
-        try db.exec(
-            \\insert into grantRecord(jti, userId, token, maxUses, uses, exp, revoked)
-            \\select g.jti, m.userId, g.token, g.maxUses, g.uses, g.exp, g.revoked
-            \\from grantRecordOld g join personUser m on m.personId = g.personId
-        );
-        try db.exec("DROP TABLE grantRecordOld");
-        try db.exec("DROP TABLE person");
-        try db.exec("DROP TABLE personUser");
-        try db.commit();
-    }
-
-    fn userNameTaken(db: *Db, name: []const u8) Error!bool {
-        var st = try Stmt.prepare(db, "select 1 from user where name = ?");
-        defer st.finalize();
-        try st.bindText(1, name);
-        return try st.step();
     }
 
     /// Does the query give a row.
@@ -426,20 +300,6 @@ pub const Db = struct {
         if (name.len < 2 or name.len > 32 or !std.ascii.isLower(name[0])) return false;
         for (name) |ch| if (!std.ascii.isLower(ch) and !std.ascii.isDigit(ch) and ch != '_' and ch != '.' and ch != '-') return false;
         return true;
-    }
-
-    /// A valid user name made from any name ("Veli Kaya" -> "veli_kaya").
-    pub fn userNameFrom(a: std.mem.Allocator, name: []const u8) ![]const u8 {
-        var out: std.ArrayList(u8) = .empty;
-        for (name) |ch| {
-            if (out.items.len == 32) break;
-            const l = std.ascii.toLower(ch);
-            try out.append(a, if (std.ascii.isLower(l) or std.ascii.isDigit(l) or l == '.' or l == '-') l else '_');
-        }
-        if (out.items.len == 0 or !std.ascii.isLower(out.items[0])) try out.insertSlice(a, 0, "u_");
-        while (out.items.len < 2) try out.append(a, '_');
-        if (out.items.len > 32) out.shrinkRetainingCapacity(32);
-        return out.items;
     }
 
     pub fn userCreate(db: *Db, name: []const u8, superuser: bool, password_hash: []const u8, now: i64) UserError!i64 {
@@ -1348,14 +1208,6 @@ pub const Db = struct {
         return try st.terminal(a);
     }
 
-    pub fn terminalList(db: *Db, a: std.mem.Allocator) ![]Terminal {
-        var st = try Stmt.prepare(db, terminal_select ++ " order by u.name");
-        defer st.finalize();
-        var list: std.ArrayList(Terminal) = .empty;
-        while (try st.step()) try list.append(a, try st.terminal(a));
-        return list.toOwnedSlice(a);
-    }
-
     /// The keys of users who have used their invitation but may not
     /// connect any more (revoked, blocked, or no terminal:connect): their
     /// connections are to be closed.
@@ -1944,43 +1796,6 @@ test "terminal access needs valid patterns and a limit" {
     try testing.expectError(error.NotFound, db.terminalInvite(999, .{ .nodes = "ist_*", .run_as = "root", .max_uses = 1 }, &th, t0 + 1, t0));
 }
 
-test "people of an older database become users" {
-    var db = try testDb();
-    defer db.close();
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    // The old shape: a person table, grants by person
-    try db.exec("DROP TABLE grantRecord");
-    try db.exec("CREATE TABLE person (personId INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, userKey TEXT UNIQUE, tokenHash TEXT UNIQUE, tokenExpires INTEGER, nodes TEXT NOT NULL, runAs TEXT NOT NULL, maxUses INTEGER, grantExp INTEGER, revoked INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL)");
-    try db.exec("CREATE TABLE grantRecord (jti TEXT PRIMARY KEY, personId INTEGER NOT NULL REFERENCES person(personId) ON DELETE CASCADE, token TEXT NOT NULL, maxUses INTEGER, uses INTEGER NOT NULL DEFAULT 0, exp INTEGER, revoked INTEGER NOT NULL DEFAULT 0)");
-    try db.exec("insert into person(personId, name, kind, userKey, nodes, runAs, maxUses, created) values(7, 'Veli Kaya', 'human', 'UVELI', 'ist_*', 'root', 5, 1), (8, 'Veli Kaya', 'bot', null, '*', 'bot', 1, 2)");
-    try db.exec("insert into grantRecord(jti, personId, token, maxUses, uses) values('J7', 7, 'g', 5, 3)");
-    _ = try db.userCreate("veli_kaya", false, "h", 1);
-    // A database from before version 1: no terminal_user, no panel:login
-    try db.exec("PRAGMA user_version = 0");
-    try db.exec("delete from role where name = 'terminal_user'");
-    try db.exec("delete from roleRight where module = 'panel'");
-    try db.initSchema();
-    // Existing roles may sign in; terminal_user only connects
-    try testing.expect(rights.has(try db.roleRights(a, 1), "panel", "login"));
-    var tu: i64 = 0;
-    for (try db.roleList(a)) |r| if (std.mem.eql(u8, r.name, "terminal_user")) {
-        tu = r.id;
-    };
-    const tu_rights = try db.roleRights(a, tu);
-    try testing.expectEqual(@as(usize, 1), tu_rights.len);
-    try testing.expectEqualStrings("terminal:connect", tu_rights[0]);
-    // Named as user names go, unique; the access and its grant kept
-    const t = (try db.terminalByKey(a, "UVELI")).?;
-    try testing.expectEqualStrings("veli_kaya_2", t.name);
-    try testing.expectEqual(@as(?i64, 3), t.uses);
-    try testing.expectEqual(Db.UseResult.allowed, try db.grantUse("J7", "ist_gw1", "M1", "UVELI", t0));
-    try testing.expect((try db.userByName(a, "veli_kaya_3")) != null);
-    try testing.expect(!try db.has("select 1 from sqlite_master where name = 'person'"));
-    try testing.expectEqualStrings("u_9x", try Db.userNameFrom(a, "9x"));
-}
-
 test "settings and session logs" {
     var db = try testDb();
     defer db.close();
@@ -2145,46 +1960,9 @@ test "roles, their rights and the roles of users" {
     try testing.expectEqual(@as(i64, 0), (try db.roleGet(a, 2)).?.user_count);
 }
 
-test "a database from before roles: the first admin becomes the superuser" {
+test "acting as another user in a browser session" {
     var db = try testDb();
     defer db.close();
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    // The old shape: a role column, no isSuperuser
-    try db.exec("ALTER TABLE user DROP COLUMN isSuperuser");
-    try db.exec("ALTER TABLE user ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
-    try db.exec("insert into user(name, role, passwordHash, created) values('first', 'admin', 'h', 1), ('second', 'admin', 'h', 2), ('reader', 'auditor', 'h', 3)");
-    try db.initSchema();
-    try testing.expect((try db.userByName(a, "first")).?.is_superuser);
-    try testing.expect(!(try db.userByName(a, "second")).?.is_superuser);
-    try testing.expectEqualStrings("admin", (try db.userRoles(a, 2))[0].name);
-    try testing.expectEqualStrings("auditor", (try db.userRoles(a, 3))[0].name);
-    try db.initSchema();
-    try testing.expectEqual(@as(usize, 1), (try db.userRoles(a, 3)).len);
-}
-
-test "rights from before the split: each role keeps what it could do" {
-    var db = try testDb();
-    defer db.close();
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    // The old rights: user:roles, role:update, user:update; and no
-    // web session column for acting as another user
-    try db.exec("ALTER TABLE webSession DROP COLUMN effectiveUserId");
-    try db.exec("delete from roleRight where roleId = 1 and module in ('user', 'role', 'profile')");
-    const clerk = try db.roleInsert("clerk", "", &.{ "user:browse", "user:update", "role:update" });
-    try db.exec("insert into roleRight(roleId, module, action) values(1, 'user', 'roles')");
-    try db.exec(try std.fmt.allocPrintSentinel(a, "insert into roleRight(roleId, module, action) values({d}, 'user', 'roles')", .{clerk}, 0));
-    try db.initSchema();
-    const r = try db.roleRights(a, clerk);
-    for ([_][]const u8{ "user:role_browse", "user:role_grant", "user:role_revoke", "role:role_right", "user:update_pass", "profile:update_password" }) |want|
-        try testing.expect(rights.has(r, want[0..std.mem.indexOfScalar(u8, want, ':').?], want[std.mem.indexOfScalar(u8, want, ':').? + 1 ..]));
-    try testing.expect(!rights.has(r, "user", "roles"));
-    try testing.expect(!rights.has(r, "user", "select"));
-    // The role admin has every right again, acting as another user too
-    try testing.expect(rights.has(try db.roleRights(a, 1), "user", "select"));
     const su = try db.userCreate("superuser", true, "h", 1);
     const other = try db.userCreate("veli", false, "h", 1);
     try db.webSessionCreate("T", su, 1, 100);

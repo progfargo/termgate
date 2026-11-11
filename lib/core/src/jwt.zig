@@ -69,42 +69,6 @@ pub const UserNats = struct {
 
 pub const UserClaims = Claims(UserNats);
 
-/// The nats section of an operator JWT.
-pub const OperatorNats = struct {
-    /// Extra keys allowed to sign account JWTs
-    signing_keys: ?[]const []const u8 = null,
-    /// Public key of the system account
-    system_account: ?[]const u8 = null,
-    type: []const u8 = "operator",
-    version: u8 = 2,
-};
-
-pub const OperatorClaims = Claims(OperatorNats);
-
-/// Account limits. -1 = unlimited (the defaults of nats-io/jwt).
-pub const AccountLimits = struct {
-    subs: i64 = -1,
-    data: i64 = -1,
-    payload: i64 = -1,
-    imports: i64 = -1,
-    exports: i64 = -1,
-    wildcards: bool = true,
-    conn: i64 = -1,
-    leaf: i64 = -1,
-};
-
-/// The nats section of an account JWT.
-pub const AccountNats = struct {
-    limits: AccountLimits = .{},
-    /// Keys allowed to sign user JWTs for this account (besides the account key)
-    signing_keys: ?[]const []const u8 = null,
-    default_permissions: struct { @"pub": Permission = .{}, sub: Permission = .{} } = .{},
-    type: []const u8 = "account",
-    version: u8 = 2,
-};
-
-pub const AccountClaims = Claims(AccountNats);
-
 const json_out: std.json.Stringify.Options = .{ .emit_null_optional_fields = false };
 
 /// Signs the claims and returns the token. iss, iat and jti are filled in here.

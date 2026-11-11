@@ -65,7 +65,7 @@ pub const Message = struct {
     name: []const u8 = "",
     type: []const u8 = "info",
     lines: []const []const u8 = &.{},
-    /// Goes away by itself after 5 seconds (our earlier project's; Stick: stays)
+    /// Goes away by itself after 5 seconds (our earlier project's; false: stays)
     @"auto-clear": bool = true,
     title: []const u8 = "",
 };
@@ -88,19 +88,10 @@ pub fn takeMessages(answer: std.json.Value) void {
 
 /// A message of the page itself, shown with the next page drawn.
 pub fn say(kind: []const u8, text: []const u8) void {
-    sayAs(kind, text, true);
-}
-
-/// A message that stays until it is closed (our earlier project's Stick).
-pub fn sayStick(kind: []const u8, text: []const u8) void {
-    sayAs(kind, text, false);
-}
-
-fn sayAs(kind: []const u8, text: []const u8, auto_clear: bool) void {
     const a = pending_arena.allocator();
     const lines = a.alloc([]const u8, 1) catch return;
     lines[0] = a.dupe(u8, text) catch return;
-    pending.append(a, .{ .type = kind, .lines = lines, .@"auto-clear" = auto_clear }) catch {};
+    pending.append(a, .{ .type = kind, .lines = lines }) catch {};
 }
 
 /// The last answer's messages are shown with the next page drawn too.

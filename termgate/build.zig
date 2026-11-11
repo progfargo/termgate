@@ -131,8 +131,8 @@ pub fn build(b: *std.Build) void {
     });
     // The second step (a code from an authenticator app) at sign-in: off in
     // a debug build (local use and tests: name and password only), always
-    // on in a release build (the one installed on a server). As with
-    // another earlier project's TLS. -Dsecond-step=true|false overrides it.
+    // on in a release build (the one installed on a server).
+    // -Dsecond-step=true|false overrides it.
     const server_options = b.addOptions();
     server_options.addOption(bool, "second_step", b.option(bool, "second-step", "Ask for the authenticator code at sign-in (default: on in release builds, off in debug builds)") orelse (optimize != .debug));
     // QR codes of the second step's setup key (vendor/qrcodegen)

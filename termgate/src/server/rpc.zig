@@ -1,4 +1,5 @@
-//! The calls the panel's screens make (POST /api/<name>, JSON).
+//! The database calls behind the panel's API (api.zig maps its paths to
+//! these names).
 //!
 //! `db.<method>`: one of termgate's database functions, by name. Only the
 //! functions listed here can be called, each with the right it names
@@ -34,19 +35,14 @@ const DbCall = struct {
 
 /// The database functions the panel may call, and the right each needs.
 const db_calls = [_]DbCall{
-    .{ .name = "nodeList", .module = "node", .action = "browse" },
     .{ .name = "nodeGet", .module = "node", .action = "browse" },
     .{ .name = "nodeSearch", .module = "node", .action = "browse" },
     .{ .name = "nodeSummary", .module = "node", .action = "browse" },
     .{ .name = "sessionsSearch", .module = "session", .action = "browse" },
     .{ .name = "actionsSearch", .module = "audit", .action = "browse" },
     .{ .name = "sessionsActive", .module = "session", .action = "browse" },
-    .{ .name = "sessionsRecent", .module = "session", .action = "browse" },
     .{ .name = "sessionsOfNode", .module = "session", .action = "browse" },
     .{ .name = "settingsGet", .module = "config", .action = "browse" },
-    .{ .name = "actionsRecent", .module = "audit", .action = "browse" },
-    .{ .name = "nodeCreate", .module = "node", .action = "insert", .changes = true },
-    .{ .name = "nodeNewToken", .module = "node", .action = "insert", .changes = true },
     .{ .name = "nodeApprove", .module = "node", .action = "update", .changes = true },
     .{ .name = "nodeReject", .module = "node", .action = "update", .changes = true },
     .{ .name = "nodeSetDisabled", .module = "node", .action = "update", .changes = true },
@@ -148,17 +144,17 @@ test "database calls by name, with the right checked" {
     const auditor: *const Caller = &.{ .id = 2, .name = "reader", .rights = &.{ "node:browse", "config:browse", "session:log" } };
     const nobody: *const Caller = &.{ .id = 3, .name = "new" };
 
-    // Creating a node needs node:insert
+    // Changing a node needs node:update or node:delete
     const th = dbm.tokenHash("T");
-    const create = try std.fmt.allocPrint(a, "[\"gw01\",\"pump\",\"{s}\",2000,1000]", .{&th});
-    try testing.expectEqual(Result.forbidden, (try call(&rpc, a, "db.nodeCreate", create, auditor)).?);
-    try testing.expectEqualStrings("{\"ok\":1}", (try call(&rpc, a, "db.nodeCreate", create, admin)).?.body);
+    const id = try db.nodeCreate("gw01", "pump", &th, 2000, 1000);
+    try testing.expectEqual(1, id);
+    try testing.expectEqual(Result.forbidden, (try call(&rpc, a, "db.nodeDelete", "[1]", auditor)).?);
+    try testing.expectEqual(Result.forbidden, (try call(&rpc, a, "db.nodeSetDisabled", "[1,true]", auditor)).?);
     // Errors come back by name
-    try testing.expectEqualStrings("{\"err\":\"Duplicate\"}", (try call(&rpc, a, "db.nodeCreate", create, admin)).?.body);
     try testing.expectEqualStrings("{\"err\":\"NotFound\"}", (try call(&rpc, a, "db.nodeDelete", "[99]", admin)).?.body);
 
     // Reading needs the module's browse right
-    const list = (try call(&rpc, a, "db.nodeList", "[]", auditor)).?.body;
+    const list = (try call(&rpc, a, "db.nodeSearch", "[\"\",1]", auditor)).?.body;
     try testing.expect(std.mem.indexOf(u8, list, "\"name\":\"gw01\"") != null);
     try testing.expect(std.mem.indexOf(u8, list, "\"state\":\"waiting\"") != null);
     try testing.expectEqualStrings("{\"ok\":null}", (try call(&rpc, a, "db.nodeGet", "[99]", auditor)).?.body);
@@ -168,7 +164,7 @@ test "database calls by name, with the right checked" {
     try testing.expectEqual(@as(i64, 2), (try db.settingsGet()).max_session_minutes);
 
     // Without a role: nothing, not even reading
-    try testing.expectEqual(Result.forbidden, (try call(&rpc, a, "db.nodeList", "[]", nobody)).?);
+    try testing.expectEqual(Result.forbidden, (try call(&rpc, a, "db.nodeSearch", "[\"\",1]", nobody)).?);
     try testing.expectEqual(Result.forbidden, (try call(&rpc, a, "log.commands", "[\"S1\"]", nobody)).?);
     try testing.expectEqual(Result.forbidden, (try call(&rpc, a, "db.sessionsActive", "[]", auditor)).?);
 
@@ -179,6 +175,7 @@ test "database calls by name, with the right checked" {
     try testing.expect(try call(&rpc, a, "db.userSetPassword", "[1,\"h\"]", admin) == null);
     try testing.expect(try call(&rpc, a, "db.sessionKeys", "[\"S\"]", admin) == null);
     try testing.expect(try call(&rpc, a, "db.webSessionGet", "[\"x\",0]", admin) == null);
+    try testing.expect(try call(&rpc, a, "db.nodeCreate", "[]", admin) == null);
 
     // Logs travel as base64: they are not always text
     try db.commandAdd("S1", .{ .seq = 1, .at = 5, .line = "ls\r", .output = "\x1b[31m\xff\xfe", .output_chars = 3 });

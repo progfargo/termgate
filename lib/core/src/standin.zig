@@ -2,7 +2,7 @@
 //! lib/core/testdata/nats-callout-tls.conf (port 14227). It does what termgate
 //! will do on the relay:
 //!   - answers the auth callout for every connection (known nodes, users,
-//!     itself, a registering node with its node key, a person with an
+//!     itself, a registering node with its node key, a user with an
 //!     invitation, anyone else: ca.get only)
 //!   - serves ca.get, register.<token id>, invite.<token id>,
 //!     authorize.<node> and audit.<node>
@@ -221,7 +221,7 @@ pub const Termgate = struct {
         try t.app.publish(reply, body);
     }
 
-    /// An invitation is used: bind the key to the person, mark the token
+    /// An invitation is used: bind the key to the user, mark the token
     /// used, answer with the grant.
     fn answerInvite(t: *Termgate, m: Conn.Message, reply: []const u8) !void {
         var arena: std.heap.ArenaAllocator = .init(t.gpa);

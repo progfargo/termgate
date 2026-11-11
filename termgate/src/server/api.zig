@@ -1,6 +1,6 @@
 //! The panel's API as in our earlier project: POST /api/<page>/<function>, JSON in
 //! and out. Each path stands for one of termgate's calls (auth.zig for
-//! users, roles, profile and signing in; panel.zig for nodes, people,
+//! users, roles, profile and signing in; panel.zig for nodes, terminal access,
 //! sessions, audit and configuration), so the rules and their tests stay
 //! in one place; this file gives them our earlier project's paths and answers.
 //!

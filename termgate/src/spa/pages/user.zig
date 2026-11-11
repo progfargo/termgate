@@ -496,7 +496,7 @@ fn renderTerminal(form: Invite) void {
     content.field(&b, "term-runas-input", "As Unix user:", form.run_as, .{ .required = true, .max = 32, .help = "The account on the node the session runs as." });
     content.field(&b, "term-uses-input", "Sessions:", form.uses, .{ .max = 6, .help = "How many sessions; empty: no limit (then give days)." });
     content.field(&b, "term-days-input", "Days:", form.days, .{ .max = 4, .help = "Valid for this many days; empty: no end (then give sessions)." });
-    content.checkbox(&b, "term-bot-input", "A bot (a program, not a person)", form.bot);
+    content.checkbox(&b, "term-bot-input", "A bot (a program)", form.bot);
     b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userTerminalInvite\" class=\"button button-primary button-sm\">Make invitation</button> <a href=\"#/user\" class=\"button button-default button-sm\">Back</a></div></div>");
     b.raw("</form>");
     content.contentEnd(&b);

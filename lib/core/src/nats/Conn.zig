@@ -22,9 +22,8 @@ const Conn = @This();
 pub const Options = struct {
     host: []const u8 = "127.0.0.1",
     port: u16 = 4222,
-    /// User JWT (decentralized auth); sent with the nonce signature
-    jwt: ?[]const u8 = null,
-    /// Key that signs the server nonce (user key with jwt, or a plain nkey user)
+    /// Key that signs the server nonce (an nkey user, or a client the
+    /// auth callout identifies by its key)
     key: ?nkeys.KeyPair = null,
     /// Auth token sent in CONNECT (auth callout: node key or invitation)
     token: ?[]const u8 = null,
@@ -349,9 +348,8 @@ fn handshake(c: *Conn, opts: Options) !void {
         .echo = opts.echo,
         .headers = true,
         .no_responders = true,
-        .jwt = opts.jwt,
-        // Plain nkey users (no JWT) identify themselves with the public key
-        .nkey = if (opts.key != null and opts.jwt == null) @as(?[]const u8, &nkey_pub) else null,
+        // The client identifies itself with its public key
+        .nkey = if (opts.key != null) @as(?[]const u8, &nkey_pub) else null,
         .sig = sig,
         .auth_token = opts.token,
     };

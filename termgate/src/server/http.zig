@@ -18,7 +18,6 @@ pub const State = struct {
     web_dir: []const u8,
     auth: *auth_mod.Auth,
     panel: *panel_mod.Panel,
-    relay_connected: std.atomic.Value(bool) = .init(false),
 };
 
 /// The browser session's cookie. HttpOnly: the page's script cannot read
@@ -159,23 +158,19 @@ fn api(state: *State, req: *std.http.Server.Request, name: []const u8) !void {
     const a = arena.allocator();
 
     var token: ?[]const u8 = null;
+    // The single-page app says so (x-termgate: spa), which a form on
+    // another site cannot
     var marked = false;
-    // The single-page app says so (x-termgate: spa): it uses the page
-    // paths and gets our earlier project's answers (api.zig)
-    var panel_path = false;
     var plain_http = false;
     var it = req.iterateHeaders();
     while (it.next()) |h| {
-        if (std.ascii.eqlIgnoreCase(h.name, "x-termgate")) {
-            panel_path = std.mem.eql(u8, h.value, "spa");
-            marked = panel_path;
-        }
+        if (std.ascii.eqlIgnoreCase(h.name, "x-termgate")) marked = std.mem.eql(u8, h.value, "spa");
         if (std.ascii.eqlIgnoreCase(h.name, "x-forwarded-proto")) plain_http = std.ascii.eqlIgnoreCase(h.value, "http");
         if (std.ascii.eqlIgnoreCase(h.name, "cookie")) token = try cookie(a, h.value);
     }
     // The panel's API (api.zig): a page path stands for one of the calls
     // below, and its answer is given in our earlier project's form
-    const call_name = if (panel_path and !std.mem.eql(u8, name, "init")) api_mod.route(name) orelse
+    const call_name = if (!std.mem.eql(u8, name, "init")) api_mod.route(name) orelse
         return req.respond("{\"messages\":[{\"name\":\"notFound\",\"type\":\"error\",\"lines\":[\"Unknown call.\"]}]}", .{ .status = .not_found }) else name;
     const len = req.head.content_length orelse 0;
     if (len > 1 << 20) return req.respond("", .{ .status = .payload_too_large });
@@ -186,23 +181,15 @@ fn api(state: *State, req: *std.http.Server.Request, name: []const u8) !void {
     const json: std.http.Header = .{ .name = "content-type", .value = "application/json" };
     if (!marked) return req.respond("{\"error\":\"missing x-termgate header\"}", .{ .status = .forbidden, .extra_headers = &.{json} });
     const now: i64 = @intCast(@divFloor(Io.Timestamp.now(state.io, .real).nanoseconds, std.time.ns_per_s));
-    if (panel_path and std.mem.eql(u8, name, "init")) return req.respond(try api_mod.init(state.auth, a, token, now), .{ .extra_headers = &.{json} });
-    return call(state, req, a, call_name, panel_path, body, token, plain_http, now);
+    if (std.mem.eql(u8, name, "init")) return req.respond(try api_mod.init(state.auth, a, token, now), .{ .extra_headers = &.{json} });
+    return call(state, req, a, call_name, body, token, plain_http, now);
 }
 
-/// Runs a call (by its internal name) and answers it; `panel_path`: the
-/// answer is converted to the panel API's form.
-fn call(state: *State, req: *std.http.Server.Request, a: std.mem.Allocator, name: []const u8, panel_path: bool, body: []const u8, token: ?[]const u8, plain_http: bool, now: i64) !void {
+/// Runs a call (by its internal name) and answers it in the panel API's
+/// form.
+fn call(state: *State, req: *std.http.Server.Request, a: std.mem.Allocator, name: []const u8, body: []const u8, token: ?[]const u8, plain_http: bool, now: i64) !void {
     const json: std.http.Header = .{ .name = "content-type", .value = "application/json" };
 
-    if (std.mem.eql(u8, name, "ping")) {
-        const out = try std.json.Stringify.valueAlloc(a, .{
-            .ok = true,
-            .relay_connected = state.relay_connected.load(.acquire),
-            .signed_in = (try auth_mod.caller(state.auth, a, token, now)) != null,
-        }, .{});
-        return req.respond(out, .{ .extra_headers = &.{json} });
-    }
     // Who is calling, and what a changing call is about, before it runs
     const who = try auth_mod.caller(state.auth, a, token, now);
     const recorded = who != null and panel_mod.changes(name);
@@ -230,27 +217,21 @@ fn call(state: *State, req: *std.http.Server.Request, a: std.mem.Allocator, name
             headers[1] = .{ .name = "set-cookie", .value = if (plain_http) cookie_name ++ "=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict" else cookie_name ++ "=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict; Secure" };
             n = 2;
         }
-        const out = try answerFor(a, panel_path, r.status, r.body);
+        const out = try api_mod.answer(a, r.status, r.body);
         return req.respond(out.body, .{ .status = out.status, .extra_headers = headers[0..n] });
     }
     // Everything else is for signed-in users
     const user = who orelse {
-        const out = try answerFor(a, panel_path, .unauthorized, "{\"error\":\"not signed in\"}");
+        const out = try api_mod.answer(a, .unauthorized, "{\"error\":\"not signed in\"}");
         return req.respond(out.body, .{ .status = out.status, .extra_headers = &.{json} });
     };
     if (try panel_mod.call(state.panel, a, name, body, &user, now)) |r| {
         if (recorded) panel_mod.record(state.panel, now, user.auditName(a), name, detail, r.status == .ok and !std.mem.startsWith(u8, r.body, "{\"err\""));
         if (recorded and r.status == .ok) panel_mod.enforceTerminal(state.panel);
-        const out = try answerFor(a, panel_path, r.status, r.body);
+        const out = try api_mod.answer(a, r.status, r.body);
         return req.respond(out.body, .{ .status = out.status, .extra_headers = &.{json} });
     }
     return req.respond("{\"error\":\"unknown call\"}", .{ .status = .not_found, .extra_headers = &.{json} });
-}
-
-/// The answer as the call gave it, or in the panel API's form.
-fn answerFor(a: std.mem.Allocator, panel_path: bool, status: std.http.Status, body: []const u8) !api_mod.Answer {
-    if (!panel_path) return .{ .status = status, .body = body, .ok = status == .ok };
-    return api_mod.answer(a, status, body);
 }
 
 /// The name a sign-in was tried with (never the password).

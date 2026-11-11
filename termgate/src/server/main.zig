@@ -209,7 +209,6 @@ pub fn main(init: std.process.Init) !void {
     while (true) {
         if (service) |sv| if (!sv.alive()) {
             log.warn("lost the relay connection; reconnecting", .{});
-            state.relay_connected.store(false, .release);
             panel.setService(null);
             sv.stop();
             service = null;
@@ -218,7 +217,6 @@ pub fn main(init: std.process.Init) !void {
             if (service_mod.Service.start(gpa, io, loaded.cfg, &db, &db_lock, &recorder)) |sv| {
                 service = sv;
                 panel.setService(sv);
-                state.relay_connected.store(true, .release);
                 log.info("connected to the relay {s}:{d}", .{ loaded.cfg.relay_host, loaded.cfg.relay_port });
             } else |e| log.warn("cannot connect to the relay {s}:{d}: {s}", .{ loaded.cfg.relay_host, loaded.cfg.relay_port, @errorName(e) });
         }

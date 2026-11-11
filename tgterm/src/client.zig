@@ -123,6 +123,7 @@ pub fn run(gpa: std.mem.Allocator, io: Io, p: Profile, node: []const u8) !u8 {
         .gpa = gpa,
     };
 
+    say("Connected to {s}.\n", .{node});
     // Terminal: raw mode while the session runs
     const interactive = term.isTerminal(0);
     const raw: ?term.Raw = if (interactive) term.Raw.enter(0) catch null else null;

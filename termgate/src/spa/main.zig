@@ -16,6 +16,8 @@ const Form = @import("form.zig").Form;
 const login = @import("pages/login.zig");
 const welcome = @import("pages/welcome.zig");
 const user = @import("pages/user.zig");
+const role = @import("pages/role.zig");
+const profile = @import("pages/profile.zig");
 
 const routes = [_]router.Route{
     .{ .path = "/login", .handler = login.render, .public = true },
@@ -26,6 +28,13 @@ const routes = [_]router.Route{
     .{ .path = "/user/role", .handler = user.role },
     .{ .path = "/user/update_pass", .handler = user.updatePass },
     .{ .path = "/user/delete", .handler = user.delete },
+    .{ .path = "/role", .handler = role.browse },
+    .{ .path = "/role/insert", .handler = role.insert },
+    .{ .path = "/role/update", .handler = role.update },
+    .{ .path = "/role/right", .handler = role.right },
+    .{ .path = "/role/delete", .handler = role.delete },
+    .{ .path = "/profile", .handler = profile.render },
+    .{ .path = "/profile/update_pass", .handler = profile.updatePass },
 };
 
 const Action = struct { name: []const u8, run: *const fn (Form) void };
@@ -46,6 +55,11 @@ const actions = [_]Action{
     .{ .name = "userDelete", .run = user.submitDelete },
     .{ .name = "userSelect", .run = user.select },
     .{ .name = "userUnselect", .run = user.unselect },
+    .{ .name = "roleInsert", .run = role.submitInsert },
+    .{ .name = "roleUpdate", .run = role.submitUpdate },
+    .{ .name = "roleRightUpdate", .run = role.submitRight },
+    .{ .name = "roleDelete", .run = role.submitDelete },
+    .{ .name = "profileUpdatePass", .run = profile.submitUpdatePass },
 };
 
 /// The first page the user may open.

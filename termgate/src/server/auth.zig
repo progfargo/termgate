@@ -403,6 +403,14 @@ fn roleCall(auth: *Auth, a: std.mem.Allocator, name: []const u8, body: []const u
         db.roleUpdate(req.id, role_name, description, req.rights) catch |e| return roleError(a, e);
         return .{ .body = "{\"ok\":true}" };
     }
+    if (std.mem.eql(u8, name, "rights")) {
+        // Only the rights, as our earlier project's role_right page: its own right
+        if (!c.can("role", "role_right")) return fail(a, .forbidden, no_right);
+        const old = (try db.roleGet(a, req.id)) orelse return fail(a, .not_found, "no such role");
+        if (std.mem.eql(u8, old.name, admin_role) and !c.is_superuser) return fail(a, .forbidden, "only the superuser changes the role admin");
+        db.roleUpdate(req.id, old.name, old.description, req.rights orelse &.{}) catch |e| return roleError(a, e);
+        return .{ .body = "{\"ok\":true}" };
+    }
     if (std.mem.eql(u8, name, "delete")) {
         if (!c.can("role", "delete")) return fail(a, .forbidden, no_right);
         const old = (try db.roleGet(a, req.id)) orelse return fail(a, .not_found, "no such role");
@@ -573,6 +581,10 @@ test "sign in with two steps; users, roles and rights" {
     const editor = try db.roleInsert("editor", "Names roles", &.{ "role:browse", "role:update" });
     try db.userGrant(veli, editor);
     const vt = try testSignIn(&auth, a, "veli", "trabzon61", now);
+    // Rights alone: role:role_right, which veli does not have
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "roles.rights", try std.fmt.allocPrint(a, "{{\"id\":{d},\"rights\":[]}}", .{editor}), vt, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "roles.rights", try std.fmt.allocPrint(a, "{{\"id\":{d},\"rights\":[\"role:browse\",\"role:update\"]}}", .{editor}), token, now)).?.status);
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "roles.rights", "{\"id\":1,\"rights\":[]}", et, now)).?.status);
     const ed_body = try std.fmt.allocPrint(a, "{{\"id\":{d},\"name\":\"editor\",\"description\":\"Renamed\"", .{editor});
     try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "roles.update", try std.mem.concat(a, u8, &.{ ed_body, ",\"rights\":[]}" }), vt, now)).?.status);
     try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "roles.update", try std.mem.concat(a, u8, &.{ ed_body, "}" }), vt, now)).?.status);

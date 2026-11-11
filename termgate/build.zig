@@ -176,7 +176,11 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/spa/main.zig"),
             .target = spa_target,
             .optimize = spa_optimize,
-            .imports = &.{.{ .name = "zig-js", .module = zig_js }},
+            .imports = &.{
+                .{ .name = "zig-js", .module = zig_js },
+                // The rights a role can give, the same list as the server's
+                .{ .name = "rights", .module = b.createModule(.{ .root_source_file = b.path("src/rights.zig"), .target = spa_target, .optimize = spa_optimize }) },
+            },
         });
         const spa = b.addExecutable(.{ .name = "termgate", .root_module = spa_module });
         spa.entry = .disabled;

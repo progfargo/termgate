@@ -37,6 +37,7 @@ const routes = [_]Route{
     .{ .path = "role/insert", .call = "roles.insert" },
     .{ .path = "role/update", .call = "roles.update" },
     .{ .path = "role/delete", .call = "roles.delete" },
+    .{ .path = "role/right_update", .call = "roles.rights" },
     // Profile
     .{ .path = "profile/update_pass", .call = "profile.password" },
 };

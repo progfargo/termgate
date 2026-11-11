@@ -3,6 +3,16 @@
 
 const std = @import("std");
 const app = @import("app.zig");
+const dom = @import("dom.zig");
+const state = @import("state.zig");
+
+/// The page's content is `b`: set, with the messages above it and the
+/// focus in its first field.
+pub fn show(b: *const app.Buf) void {
+    dom.setHtml("main-content", b.str());
+    _ = state.renderMessages();
+    dom.focusFirstField();
+}
 
 /// The page title: its parts joined by an arrow, the earlier ones links
 /// (our earlier project's page_title). Each part: (text, link or "").

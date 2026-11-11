@@ -68,7 +68,7 @@ pub const Reply = struct { status: std.http.Status = .ok, body: []const u8 };
 /// made it (see record).
 pub fn changes(name: []const u8) bool {
     if (rpc_mod.changes(name)) return true;
-    inline for (.{ "svc.endSession", "svc.kickNode", "svc.kickUser", "users.create", "users.update", "users.reset", "users.delete", "users.grant", "users.revoke", "users.select", "users.unselect", "roles.insert", "roles.update", "roles.delete", "profile.password" }) |n| {
+    inline for (.{ "svc.endSession", "svc.kickNode", "svc.kickUser", "users.create", "users.update", "users.reset", "users.delete", "users.grant", "users.revoke", "users.select", "users.unselect", "roles.insert", "roles.update", "roles.rights", "roles.delete", "profile.password" }) |n| {
         if (std.mem.eql(u8, name, n)) return true;
     }
     return false;

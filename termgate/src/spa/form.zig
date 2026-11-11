@@ -32,6 +32,16 @@ pub const Form = struct {
         return std.fmt.parseInt(i64, f.trimmed(name), 10) catch 0;
     }
 
+    /// The checked values of the checkboxes named `name`.
+    pub fn list(f: Form, name: []const u8) []const []const u8 {
+        const m = f.map orelse return &.{};
+        const v = m.get(name) orelse return &.{};
+        if (v != .array) return &.{};
+        var out: std.ArrayList([]const u8) = .empty;
+        for (v.array.items) |item| if (item == .string) out.append(app.arena(), item.string) catch {};
+        return out.items;
+    }
+
     /// A checkbox: boot.js gives "1" for checked.
     pub fn checked(f: Form, name: []const u8) bool {
         return std.mem.eql(u8, f.str(name), "1");

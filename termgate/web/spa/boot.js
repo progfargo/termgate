@@ -75,6 +75,12 @@
       for (const f of form.querySelectorAll("input[id], select[id], textarea[id]")) {
         data[f.id] = f.type === "checkbox" ? (f.checked ? "1" : "") : f.value;
       }
+      // Checkboxes with a name and no id (e.g. name="right"): the checked
+      // values as a list
+      for (const f of form.querySelectorAll("input[type=checkbox][name]:not([id])")) {
+        (data[f.name] ||= []);
+        if (f.checked) data[f.name].push(f.value);
+      }
     }
     for (const [k, v] of Object.entries(el.dataset)) if (k !== "action") data[k] = v;
     return data;
@@ -90,6 +96,13 @@
     // A message's close button
     const close = t.closest(".button-close");
     if (close) { const a = close.closest(".alert"); if (a) a.remove(); return; }
+    // All, None, Reverse for the checkboxes of a table (role rights)
+    const pick = t.closest(".select-all, .select-none, .select-reverse");
+    if (pick) {
+      for (const c of pick.closest("table").querySelectorAll("input[type=checkbox]"))
+        c.checked = pick.classList.contains("select-all") ? true : pick.classList.contains("select-none") ? false : !c.checked;
+      return;
+    }
     // A sub-menu's +/- button
     const sub = t.closest(".sub-menu-button");
     if (sub) {

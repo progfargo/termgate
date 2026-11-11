@@ -1104,6 +1104,9 @@ pub const Db = struct {
         try st.done();
     }
 
+    // A node's name never changes (there is no function for it): users'
+    // node patterns, the audit and the node's subjects refer to it.
+
     pub fn nodeDelete(db: *Db, id: i64) NodeError!void {
         var st = try Stmt.prepare(db, "delete from node where nodeId = ?");
         defer st.finalize();

@@ -15,6 +15,7 @@ const content = @import("../content.zig");
 const CargoList = @import("../lib/cargo.zig").CargoList;
 const node_page = @import("node.zig");
 const Form = @import("../form.zig").Form;
+const live = @import("../live.zig");
 
 const Session = node_page.Session;
 
@@ -115,11 +116,10 @@ pub fn browse(query: []const u8) void {
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Sessions", "" }});
     content.contentStart(&b);
-    b.add("<div id=\"session-table\">{s}</div>", .{t.html});
+    live.put(&b, liveTable, t.html);
     content.contentEnd(&b);
     content.ruler(&b, t.pages, t.page, "sessionGoPage");
     content.show(&b);
-    if (!app.waiting) remember(t.html);
 }
 
 /// The table as termgate has it now: open sessions and the page of all.
@@ -131,31 +131,11 @@ fn tableNow(key: []const u8, pn: i64) struct { html: []const u8, pages: i64 = 1,
     return .{ .html = b.str(), .pages = recent.pages, .page = recent.page };
 }
 
-// The table last shown, and when the list was last asked
-var shown: []u8 = &.{};
-var asked: i64 = 0;
-
-fn remember(html: []const u8) void {
-    app.gpa.free(shown);
-    shown = app.gpa.dupe(u8, html) catch &.{};
-    asked = app.now();
-}
-
-/// Whether the list on the screen is due a fresh look (every 5 seconds).
-pub fn tickDue() bool {
-    return app.now() - asked >= 5 and dom.exists("session-table");
-}
-
-/// The open/online state changes without F5: the table is asked again
-/// and redrawn when it changed.
-pub fn tick() void {
+/// The table again, for the live part (live.zig).
+fn liveTable() ?[]const u8 {
     const c = cargo();
     const t = tableNow(c.str("key"), c.int("pn"));
-    if (app.waiting) return;
-    asked = app.now();
-    if (std.mem.eql(u8, t.html, shown)) return;
-    dom.setHtml("session-table", t.html);
-    remember(t.html);
+    return if (app.waiting) null else t.html;
 }
 
 pub fn end(f: Form) void {

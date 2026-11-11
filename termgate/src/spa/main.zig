@@ -19,6 +19,7 @@ const role = @import("pages/role.zig");
 const profile = @import("pages/profile.zig");
 const node = @import("pages/node.zig");
 const session = @import("pages/session.zig");
+const live = @import("live.zig");
 const audit = @import("pages/audit.zig");
 const config = @import("pages/config.zig");
 const help = @import("pages/help.zig");
@@ -183,15 +184,16 @@ fn routeRun(path: []const u8, _: []const u8) void {
 }
 
 /// Four times a second: a watched session's new output; every 5 seconds
-/// the sessions list's state (one request at a time).
+/// the live part of the page (live.zig). One request at a time.
 export fn tg_tick() void {
     if (fetch.busy(.tick)) return;
     if (watch.watching()) {
         app.beginEvent();
         fetch.start(.tick, tickRun, "", "");
-    } else if (session.tickDue()) {
+    } else if (live.due()) {
         app.beginEvent();
-        fetch.start(.tick, sessionTickRun, "", "");
+        var buf: [16]u8 = undefined;
+        fetch.start(.tick, liveTickRun, std.fmt.bufPrint(&buf, "{d}", .{live.current()}) catch "", "");
     }
 }
 
@@ -199,8 +201,8 @@ fn tickRun(_: []const u8, _: []const u8) void {
     watch.tick();
 }
 
-fn sessionTickRun(_: []const u8, _: []const u8) void {
-    session.tick();
+fn liveTickRun(for_page: []const u8, _: []const u8) void {
+    live.tick(std.fmt.parseInt(u32, for_page, 10) catch return);
 }
 
 /// An element with data-action was clicked; `form` is the JSON of its

@@ -14,6 +14,7 @@ const router = @import("../router.zig");
 const content = @import("../content.zig");
 const CargoList = @import("../lib/cargo.zig").CargoList;
 const Form = @import("../form.zig").Form;
+const live = @import("../live.zig");
 
 pub const Node = struct {
     id: i64,
@@ -165,9 +166,7 @@ pub fn browse(query: []const u8) void {
     content.search("nodeSearch", key);
     // Fresh system info from the online nodes, for the next look
     _ = fetch.postRaw("node/status_all", "[]");
-    const page = nodes(key, @max(1, c.int("pn"))) orelse return;
-    const list = page.rows;
-    const sum = if (fetch.postRaw("node/summary", "[]")) |s| fetch.fieldAs(Summary, s, "data") orelse Summary{} else Summary{};
+    const t = listNow(key, c.int("pn")) orelse return;
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Nodes", "" }});
     if (state.can("node", "insert")) {
@@ -176,6 +175,19 @@ pub fn browse(query: []const u8) void {
         content.commandEnd(&b);
     }
     content.contentStart(&b);
+    live.put(&b, liveList, t.html);
+    content.contentEnd(&b);
+    content.ruler(&b, t.pages, t.page, "nodeGoPage");
+    content.show(&b);
+}
+
+/// The table of nodes as termgate has it now, or null while waiting.
+fn listNow(key: []const u8, pn: i64) ?struct { html: []const u8, pages: i64, page: i64 } {
+    const page = nodes(key, @max(1, pn)) orelse return null;
+    const list = page.rows;
+    const sum = if (fetch.postRaw("node/summary", "[]")) |s| fetch.fieldAs(Summary, s, "data") orelse Summary{} else Summary{};
+    if (app.waiting) return null;
+    var b: app.Buf = .{};
     b.raw("<table>");
     content.caption(&b, "{d} nodes · {d} online · {d} waiting for approval{s}", .{ sum.total, sum.online, sum.pending, if (key.len > 0) std.fmt.allocPrint(app.arena(), " · {d} found", .{page.total}) catch "" else "" });
     b.raw("<thead><tr><th>Name</th><th class=\"center\">State</th><th>Last seen</th><th>System</th><th class=\"right\">Command</th></tr></thead><tbody>");
@@ -204,9 +216,14 @@ pub fn browse(query: []const u8) void {
         b.raw("</div></td></tr>");
     }
     b.raw("</tbody></table>");
-    content.contentEnd(&b);
-    content.ruler(&b, page.pages, page.page, "nodeGoPage");
-    content.show(&b);
+    return .{ .html = b.str(), .pages = page.pages, .page = page.page };
+}
+
+/// The table again, for the live part (live.zig).
+fn liveList() ?[]const u8 {
+    const c = cargo();
+    const t = listNow(c.str("key"), c.int("pn")) orelse return null;
+    return t.html;
 }
 
 /// The buttons for a node, by its state and the user's rights.
@@ -368,6 +385,24 @@ pub fn display(query: []const u8) void {
     const n = nodeById(id) orelse return;
     var b: app.Buf = .{};
     recordHeader(&b, n, .info);
+    const html = infoNow(n) orelse return;
+    shown_id = id;
+    live.put(&b, liveInfo, html);
+    content.show(&b);
+}
+
+// The node whose page is shown (its live part)
+var shown_id: i64 = 0;
+
+fn liveInfo() ?[]const u8 {
+    const n = nodeById(shown_id) orelse return null;
+    return infoNow(n);
+}
+
+/// The node's details and its sessions, as termgate has them now; null
+/// while waiting.
+fn infoNow(n: Node) ?[]const u8 {
+    var b: app.Buf = .{};
     content.contentStart(&b);
     b.raw("<table><tbody>");
     b.add("<tr><th class=\"fixed-middle\">Name:</th><td>{f}</td></tr><tr><th>Description:</th><td>{f}</td></tr><tr><th>State:</th><td>", .{ app.esc(n.name), app.esc(n.description) });
@@ -389,6 +424,7 @@ pub fn display(query: []const u8) void {
     // Its sessions: the open ones first
     if (state.can("session", "browse")) {
         const answer = fetch.post("node/sessions", .{ n.name, 20 });
+        if (app.waiting) return null;
         const sessions = if (answer) |ans| fetch.fieldAs([]const Session, ans, "data") orelse &.{} else &.{};
         b.raw("<div class=\"row row-header\"><div class=\"col\"><div class=\"page-title\"><h3>Sessions</h3></div></div></div>");
         content.contentStart(&b);
@@ -398,7 +434,7 @@ pub fn display(query: []const u8) void {
         b.raw("</tbody></table>");
         content.contentEnd(&b);
     }
-    content.show(&b);
+    return b.str();
 }
 
 pub fn refresh(f: Form) void {

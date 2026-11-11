@@ -166,12 +166,32 @@ pub fn build(b: *std.Build) void {
         const spa_step = b.step("spa", "Build the panel into zig-out/web");
         b.getInstallStep().dependOn(spa_step);
         spa_step.dependOn(&b.addInstallArtifact(spa, .{ .dest_dir = .{ .override = spa_dir } }).step);
-        inline for (.{ "index.html", "boot.js", "zigjs.js" }) |f|
+        inline for (.{ "index.html", "boot.js", "zigjs.js", "test.js" }) |f|
             spa_step.dependOn(&b.addInstallFileWithDir(b.path("web/spa/" ++ f), spa_dir, f).step);
         // Installing the panel as an app (PWA)
         inline for (.{ "manifest.webmanifest", "icon-192.png", "icon-512.png" }) |f|
             spa_step.dependOn(&b.addInstallFileWithDir(b.path("web/" ++ f), .{ .custom = "web" }, f).step);
         spa_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("web/asset"), .install_dir = .{ .custom = "web" }, .install_subdir = "asset" }).step);
+        // `zig build web-test`: the panel in headless Chrome against a
+        // termgate started in a fresh folder (src/webtest.zig)
+        const webtest = b.addExecutable(.{
+            .name = "web-test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/webtest.zig"),
+                .target = b.graph.host,
+                .optimize = .Debug,
+                .link_libc = true,
+                .imports = &.{.{ .name = "db", .module = db_module }},
+            }),
+        });
+        const run_webtest = b.addRunArtifact(webtest);
+        run_webtest.addFileArg(b.graph.path(.install_bin, "termgate"));
+        run_webtest.addArg(".zig-cache/web-test");
+        run_webtest.setCwd(b.path(""));
+        // The installed termgate and panel are what is tested
+        run_webtest.step.dependOn(b.getInstallStep());
+        run_webtest.has_side_effects = true;
+        b.step("web-test", "Run the panel's browser test in headless Chrome").dependOn(&run_webtest.step);
         // The parts that do not need a browser
         const spa_tests = b.createModule(.{ .root_source_file = b.path("src/spa/app.zig"), .target = target, .optimize = optimize });
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = spa_tests })).step);

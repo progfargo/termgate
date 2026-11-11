@@ -144,4 +144,10 @@
   x.tg_start();
   // A watched session is fetched four times a second
   setInterval(() => x.tg_tick(), 250);
+  // ?test: the browser test (test.js, zig build web-test)
+  if (new URLSearchParams(location.search).has("test")) {
+    const t = document.createElement("script");
+    t.src = "/spa/test.js";
+    document.body.appendChild(t);
+  }
 })();

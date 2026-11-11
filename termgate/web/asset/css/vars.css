@@ -1,0 +1,105 @@
+:root {
+    /* colors */
+    --blue: #007bff;
+    --indigo: #6610f2;
+    --purple: #6f42c1;
+    --pink: #e83e8c;
+    --red: #e7000b;
+    --orange: #fd7e14;
+    --yellow: #ffc107;
+    --green: #28a745;
+    --teal: #20c997;
+    --cyan: #17a2b8;
+    --white: #fff;
+    --grey: #62748e;
+    --black: #000000;
+    --greyDark: #1d293d;
+
+    --primary: #afb4f4;
+    --secondary: #62748e;
+    --success: #7cdcb0;
+    --info: var(--primary);
+    --warning: #f7c98f;
+    --error: #efabac;
+    --light: #f8fafc;
+    --dark: #0f172b;
+    --accent: var(--warning);
+    --default: #90a1b9;
+
+    --bgColor: var(--white);
+    --surfaceColor: var(--white);
+    --textColor: #334155;
+    --linkColor: var(--primary);
+
+    --borderColor: #e2e8f0;
+
+    --leftMenuColor: var(--white);
+    --headerColor: var(--white);
+
+    /* spacing (golden ratio based) */
+    --gold: 1.618;
+    --u4: 0.9rem;
+    --u3: calc(var(--u4) / var(--gold));
+    --u2: calc(var(--u3) / var(--gold));
+    --u1: calc(var(--u2) / var(--gold));
+    --u5: calc(var(--u4) * var(--gold));
+    --u6: calc(var(--u5) * var(--gold));
+    --u7: calc(var(--u6) * var(--gold));
+    --u8: calc(var(--u7) * var(--gold));
+    --u9: calc(var(--u8) * var(--gold));
+    --u10: calc(var(--u9) * var(--gold));
+    --u11: calc(var(--u10) * var(--gold));
+    --u12: calc(var(--u11) * var(--gold));
+    --u13: calc(var(--u12) * var(--gold));
+    --u14: calc(var(--u13) * var(--gold));
+    --u15: calc(var(--u14) * var(--gold));
+    --u16: calc(var(--u15) * var(--gold));
+    --u17: calc(var(--u16) * var(--gold));
+    --u18: calc(var(--u17) * var(--gold));
+    --u19: calc(var(--u18) * var(--gold));
+    --u20: calc(var(--u19) * var(--gold));
+
+    --leftMenuWidth: calc(var(--u10) * 1.2);
+
+    /* font sizes */
+    --fg: 1.2;
+    --f4: 1rem;
+    --f3: calc(var(--f4) / var(--fg));
+    --f2: calc(var(--f3) / var(--fg));
+    --f5: calc(var(--f4) * var(--fg));
+    --f6: calc(var(--f5) * var(--fg));
+    --f7: calc(var(--f6) * var(--fg));
+    --f8: calc(var(--f7) * var(--fg));
+    --f9: calc(var(--f8) * var(--fg));
+    --f10: calc(var(--f9) * var(--fg));
+    --f11: calc(var(--f10) * var(--fg));
+
+    /* fonts */
+    --titleFont: "ubuntu";
+    --textFont: "ubuntu";
+}
+
+/* dark theme overrides — fully custom palette, not derived from light */
+:root.dark {
+    /* surfaces */
+    --bgColor: #0a0f1e;
+    --surfaceColor: #1a2236;
+    --headerColor: #1a2236;
+    --leftMenuColor: #1a2236;
+
+    --textColor: #e5e7eb;
+    --borderColor: #2d3748;
+
+    /* semantic — more vivid for dark backgrounds */
+    --primary: #a5b4fc;
+    --success: #34d399;
+    --warning: #fbbf24;
+    --error: #f87171;
+    --info: var(--primary);
+    --accent: var(--warning);
+    --default: #94a3b8;
+    --grey: #94a3b8;
+    --secondary: #94a3b8;
+
+    --linkColor: var(--primary);
+}

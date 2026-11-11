@@ -1,0 +1,6 @@
+body#not-found-page {
+    main {
+        padding: 0;
+        margin: var(--u7) 0;
+    }
+}

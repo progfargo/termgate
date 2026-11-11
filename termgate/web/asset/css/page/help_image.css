@@ -1,0 +1,13 @@
+body#help-image-page {
+    table {
+        tbody {
+            td.help-image {
+                img {
+                    max-width: 100%;
+                    min-width: 170px;
+                    height: auto;
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,37 @@
+.footer {
+    margin-top: var(--u6);
+    color: var(--grey);
+    flex-wrap: wrap;
+
+    .footer-note {
+        display: flex;
+        justify-content: flex-start;
+        border-top: 1px solid var(--borderColor);
+
+        p {
+            margin-top: 0;
+        }
+    }
+
+    .footer-menu {
+        margin-right: var(--u4);
+        white-space: nowrap;
+        overflow: hidden;
+
+        i.fa-solid,
+        i.fab {
+            padding-right: var(--u4);
+        }
+
+        a {
+            padding: var(--u4) var(--u4) 0 0;
+            display: inline-block;
+            color: color-mix(in srgb, var(--textColor) 60%, var(--bgColor));
+
+            &:hover,
+            &.active {
+                color: var(--textColor);
+            }
+        }
+    }
+}

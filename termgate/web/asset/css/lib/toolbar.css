@@ -1,0 +1,57 @@
+.toolbar {
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    height: calc(var(--u6) / 1.1);
+
+    .command {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        width: 80%;
+
+        .button {
+            margin-right: var(--u3);
+
+            &.selected {
+                i {
+                    color: var(--accent);
+                }
+            }
+        }
+    }
+
+    .command-box {
+        position: relative;
+        z-index: 1000;
+
+        .toggle-box {
+            visibility: hidden;
+
+            .button {
+                padding: var(--u3);
+            }
+        }
+
+        .item-list {
+            position: absolute;
+            right: 0;
+            display: flex;
+            flex-direction: row;
+            display: none;
+            margin-top: var(--u3);
+            background-color: white;
+
+            .button {
+                margin-top: var(--u3);
+                width: 100%;
+                text-align: left;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.12);
+
+                &:hover {
+                    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.1);
+                }
+            }
+        }
+    }
+}

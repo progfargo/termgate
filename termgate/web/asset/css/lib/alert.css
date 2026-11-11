@@ -1,0 +1,132 @@
+/* alert */
+.alert {
+    margin-top: var(--u3);
+    padding: var(--u5) var(--u5);
+    position: relative;
+    border-radius: 4px;
+
+    &:first-child {
+        margin-top: 0;
+    }
+
+    i.button-close {
+        padding: var(--u3);
+        position: absolute;
+        top: var(--u3);
+        right: var(--u3);
+        font-size: var(--f5);
+        font-weight: bold;
+        background-color: inherit;
+        color: var(--grey);
+    }
+
+    i.button-close:hover {
+        color: var(--textColor);
+    }
+
+    p {
+        margin-top: var(--u3);
+    }
+
+    p:first-of-type {
+        margin-top: 0;
+    }
+}
+
+.alert-default {
+    background-color: color-mix(in srgb, var(--default) 25%, var(--bgColor));
+    border-color: color-mix(in srgb, var(--default) 35%, var(--bgColor));
+}
+
+.alert-primary {
+    background-color: color-mix(in srgb, var(--primary) 25%, var(--bgColor));
+    border-color: color-mix(in srgb, var(--primary) 35%, var(--bgColor));
+}
+
+.alert-accent {
+    background-color: color-mix(in srgb, var(--accent) 25%, var(--bgColor));
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--bgColor));
+}
+
+.alert-info {
+    background-color: color-mix(in srgb, var(--info) 25%, var(--bgColor));
+    border-color: color-mix(in srgb, var(--info) 35%, var(--bgColor));
+}
+
+.alert-success {
+    background-color: color-mix(in srgb, var(--success) 25%, var(--bgColor));
+    border-color: color-mix(in srgb, var(--success) 35%, var(--bgColor));
+}
+
+.alert-warning {
+    background-color: color-mix(in srgb, var(--warning) 25%, var(--bgColor));
+    border-color: color-mix(in srgb, var(--warning) 35%, var(--bgColor));
+}
+
+.alert-error {
+    background-color: color-mix(in srgb, var(--error) 25%, var(--bgColor));
+    border-color: color-mix(in srgb, var(--error) 35%, var(--bgColor));
+}
+
+/* callout */
+.callout {
+    padding: var(--u5) var(--u4);
+    border: 1px solid var(--borderColor);
+    border-left-width: var(--u2);
+
+    h4 {
+        margin: 0;
+    }
+
+    p {
+        margin-top: var(--u4);
+    }
+}
+
+.callout-default {
+    border-left-color: var(--default);
+
+    & h4 {
+        color: color-mix(in srgb, var(--default) 90%, var(--textColor));
+    }
+}
+
+.callout-primary {
+    border-left-color: var(--primary);
+
+    & h4 {
+        color: color-mix(in srgb, var(--primary) 90%, var(--textColor));
+    }
+}
+
+.callout-success {
+    border-left-color: var(--success);
+
+    & h4 {
+        color: color-mix(in srgb, var(--success) 90%, var(--textColor));
+    }
+}
+
+.callout-info {
+    border-left-color: var(--info);
+
+    & h4 {
+        color: color-mix(in srgb, var(--info) 90%, var(--textColor));
+    }
+}
+
+.callout-warning {
+    border-left-color: var(--warning);
+
+    & h4 {
+        color: color-mix(in srgb, var(--warning) 90%, var(--textColor));
+    }
+}
+
+.callout-error {
+    border-left-color: var(--error);
+
+    & h4 {
+        color: color-mix(in srgb, var(--error) 90%, var(--textColor));
+    }
+}

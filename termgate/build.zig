@@ -165,6 +165,35 @@ pub fn build(b: *std.Build) void {
         b.step("web-test", "Run the panel's self-tests in headless Chrome").dependOn(&run.step);
     }
 
+    // The single-page panel (zig-out/web/spa), built like our earlier project's:
+    // Zig compiled to WASM that builds the page in HTML through zig-js
+    // (vendor/zig-js); its style sheet and fonts are web/asset
+    {
+        const spa_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
+        const spa_optimize: std.builtin.OptimizeMode = if (b.option(bool, "spa-debug", "Build the single-page panel with safety checks") orelse false) .Debug else .ReleaseSmall;
+        const zig_js = b.createModule(.{ .root_source_file = b.path("vendor/zig-js/src/main.zig"), .target = spa_target, .optimize = spa_optimize });
+        const spa_module = b.createModule(.{
+            .root_source_file = b.path("src/spa/main.zig"),
+            .target = spa_target,
+            .optimize = spa_optimize,
+            .imports = &.{.{ .name = "zig-js", .module = zig_js }},
+        });
+        const spa = b.addExecutable(.{ .name = "termgate", .root_module = spa_module });
+        spa.entry = .disabled;
+        spa.rdynamic = true;
+        spa.export_memory = true;
+        const spa_dir: std.Build.InstallDir = .{ .custom = "web/spa" };
+        const spa_step = b.step("spa", "Build the single-page panel into zig-out/web/spa");
+        b.getInstallStep().dependOn(spa_step);
+        spa_step.dependOn(&b.addInstallArtifact(spa, .{ .dest_dir = .{ .override = spa_dir } }).step);
+        inline for (.{ "index.html", "boot.js", "zigjs.js" }) |f|
+            spa_step.dependOn(&b.addInstallFileWithDir(b.path("web/spa/" ++ f), spa_dir, f).step);
+        spa_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("web/asset"), .install_dir = .{ .custom = "web" }, .install_subdir = "asset" }).step);
+        // The parts that do not need a browser
+        const spa_tests = b.createModule(.{ .root_source_file = b.path("src/spa/app.zig"), .target = target, .optimize = optimize });
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = spa_tests })).step);
+    }
+
     // The panel (zig-out/web): the screens as WASM for the browser, with
     // SDL3 and Emscripten (src/web/main.zig, web/loader.js). Zig compiles
     // the panel and LVGL for wasm32-emscripten; emcc links them with

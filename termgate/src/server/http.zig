@@ -1,13 +1,13 @@
-//! The web panel's HTTP side: the UI's files (index.html, loader.js,
-//! termgate.js, termgate.wasm, and the manifest and icons that make it
-//! installable) and
-//! the API the UI calls (POST /api/<name>, JSON).
-//! Plain HTTP on localhost; nginx in front terminates HTTPS.
+//! The web panel's HTTP side: the UI's files and the API the UI calls
+//! (POST /api/<page>/<function>, JSON; see api.zig). The single-page app
+//! is under /spa/, its style sheet and fonts under /asset/ (as in
+//! our earlier project). Plain HTTP on localhost; nginx in front terminates HTTPS.
 
 const std = @import("std");
 const Io = std.Io;
 const auth_mod = @import("auth.zig");
 const panel_mod = @import("panel.zig");
+const api_mod = @import("api.zig");
 
 const log = std.log.scoped(.termgate);
 
@@ -97,6 +97,7 @@ fn handle(state: *State, req: *std.http.Server.Request) !void {
     const path = if (std.mem.indexOfScalar(u8, req.head.target, '?')) |q| req.head.target[0..q] else req.head.target;
     if (std.mem.startsWith(u8, path, "/api/")) return api(state, req, path["/api/".len..]);
     if (req.head.method != .GET and req.head.method != .HEAD) return req.respond("", .{ .status = .method_not_allowed });
+    if (std.mem.startsWith(u8, path, "/spa/") or std.mem.startsWith(u8, path, "/asset/")) return staticFile(state, req, path[1..]);
     for (files) |f| {
         if (!std.mem.eql(u8, path, f.path)) continue;
         const full = try std.fs.path.join(state.gpa, &.{ state.web_dir, f.name });
@@ -112,6 +113,44 @@ fn handle(state: *State, req: *std.http.Server.Request) !void {
     return req.respond("not found", .{ .status = .not_found });
 }
 
+/// A file of the single-page app or its assets, by its path under the
+/// panel's folder. Only plain names: letters, digits, "-", "_", "." and
+/// "/", no "..".
+fn staticFile(state: *State, req: *std.http.Server.Request, rel: []const u8) !void {
+    const plain = blk: {
+        if (std.mem.indexOf(u8, rel, "..") != null or rel.len == 0 or rel[rel.len - 1] == '/') break :blk false;
+        for (rel) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '-' and ch != '_' and ch != '.' and ch != '/') break :blk false;
+        break :blk true;
+    };
+    if (!plain) return req.respond("not found", .{ .status = .not_found });
+    const full = try std.fs.path.join(state.gpa, &.{ state.web_dir, rel });
+    defer state.gpa.free(full);
+    const data = Io.Dir.cwd().readFileAlloc(state.io, full, state.gpa, .limited(64 << 20)) catch
+        return req.respond("not found", .{ .status = .not_found });
+    defer state.gpa.free(data);
+    return req.respond(data, .{ .extra_headers = &.{
+        .{ .name = "content-type", .value = mimeOf(rel) },
+        .{ .name = "cache-control", .value = "no-cache" },
+    } });
+}
+
+fn mimeOf(name: []const u8) []const u8 {
+    const types = [_]struct { []const u8, []const u8 }{
+        .{ ".html", "text/html; charset=utf-8" },
+        .{ ".js", "text/javascript; charset=utf-8" },
+        .{ ".css", "text/css; charset=utf-8" },
+        .{ ".wasm", "application/wasm" },
+        .{ ".woff2", "font/woff2" },
+        .{ ".ttf", "font/ttf" },
+        .{ ".png", "image/png" },
+        .{ ".svg", "image/svg+xml" },
+        .{ ".json", "application/json" },
+        .{ ".webmanifest", "application/manifest+json" },
+    };
+    for (types) |t| if (std.mem.endsWith(u8, name, t[0])) return t[1];
+    return "application/octet-stream";
+}
+
 /// POST /api/<name>: JSON in, JSON out. Calls must carry the header
 /// "x-termgate: 1": a form on another site cannot set it, so it cannot make
 /// a signed-in browser call the API.
@@ -123,13 +162,23 @@ fn api(state: *State, req: *std.http.Server.Request, name: []const u8) !void {
 
     var token: ?[]const u8 = null;
     var marked = false;
+    // The single-page app says so (x-termgate: spa): it uses the page
+    // paths and gets our earlier project's answers (api.zig)
+    var panel_path = false;
     var plain_http = false;
     var it = req.iterateHeaders();
     while (it.next()) |h| {
-        if (std.ascii.eqlIgnoreCase(h.name, "x-termgate")) marked = std.mem.eql(u8, h.value, "1");
+        if (std.ascii.eqlIgnoreCase(h.name, "x-termgate")) {
+            panel_path = std.mem.eql(u8, h.value, "spa");
+            marked = panel_path or std.mem.eql(u8, h.value, "1");
+        }
         if (std.ascii.eqlIgnoreCase(h.name, "x-forwarded-proto")) plain_http = std.ascii.eqlIgnoreCase(h.value, "http");
         if (std.ascii.eqlIgnoreCase(h.name, "cookie")) token = try cookie(a, h.value);
     }
+    // The panel's API (api.zig): a page path stands for one of the calls
+    // below, and its answer is given in our earlier project's form
+    const call_name = if (panel_path and !std.mem.eql(u8, name, "init")) api_mod.route(name) orelse
+        return req.respond("{\"messages\":[{\"name\":\"notFound\",\"type\":\"error\",\"lines\":[\"Unknown call.\"]}]}", .{ .status = .not_found }) else name;
     const len = req.head.content_length orelse 0;
     if (len > 1 << 20) return req.respond("", .{ .status = .payload_too_large });
     var body_buf: [4096]u8 = undefined;
@@ -139,6 +188,14 @@ fn api(state: *State, req: *std.http.Server.Request, name: []const u8) !void {
     const json: std.http.Header = .{ .name = "content-type", .value = "application/json" };
     if (!marked) return req.respond("{\"error\":\"missing x-termgate header\"}", .{ .status = .forbidden, .extra_headers = &.{json} });
     const now: i64 = @intCast(@divFloor(Io.Timestamp.now(state.io, .real).nanoseconds, std.time.ns_per_s));
+    if (panel_path and std.mem.eql(u8, name, "init")) return req.respond(try api_mod.init(state.auth, a, token, now), .{ .extra_headers = &.{json} });
+    return call(state, req, a, call_name, panel_path, body, token, plain_http, now);
+}
+
+/// Runs a call (by its internal name) and answers it; `panel_path`: the
+/// answer is converted to the panel API's form.
+fn call(state: *State, req: *std.http.Server.Request, a: std.mem.Allocator, name: []const u8, panel_path: bool, body: []const u8, token: ?[]const u8, plain_http: bool, now: i64) !void {
+    const json: std.http.Header = .{ .name = "content-type", .value = "application/json" };
 
     if (std.mem.eql(u8, name, "ping")) {
         const out = try std.json.Stringify.valueAlloc(a, .{
@@ -171,16 +228,26 @@ fn api(state: *State, req: *std.http.Server.Request, name: []const u8) !void {
             headers[1] = .{ .name = "set-cookie", .value = if (plain_http) cookie_name ++ "=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict" else cookie_name ++ "=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict; Secure" };
             n = 2;
         }
-        return req.respond(r.body, .{ .status = r.status, .extra_headers = headers[0..n] });
+        const out = try answerFor(a, panel_path, r.status, r.body);
+        return req.respond(out.body, .{ .status = out.status, .extra_headers = headers[0..n] });
     }
     // Everything else is for signed-in users
-    const user = who orelse
-        return req.respond("{\"error\":\"not signed in\"}", .{ .status = .unauthorized, .extra_headers = &.{json} });
+    const user = who orelse {
+        const out = try answerFor(a, panel_path, .unauthorized, "{\"error\":\"not signed in\"}");
+        return req.respond(out.body, .{ .status = out.status, .extra_headers = &.{json} });
+    };
     if (try panel_mod.call(state.panel, a, name, body, &user, now)) |r| {
         if (recorded) panel_mod.record(state.panel, now, user.auditName(a), name, detail, r.status == .ok and !std.mem.startsWith(u8, r.body, "{\"err\""));
-        return req.respond(r.body, .{ .status = r.status, .extra_headers = &.{json} });
+        const out = try answerFor(a, panel_path, r.status, r.body);
+        return req.respond(out.body, .{ .status = out.status, .extra_headers = &.{json} });
     }
     return req.respond("{\"error\":\"unknown call\"}", .{ .status = .not_found, .extra_headers = &.{json} });
+}
+
+/// The answer as the call gave it, or in the panel API's form.
+fn answerFor(a: std.mem.Allocator, panel_path: bool, status: std.http.Status, body: []const u8) !api_mod.Answer {
+    if (!panel_path) return .{ .status = status, .body = body, .ok = status == .ok };
+    return api_mod.answer(a, status, body);
 }
 
 /// The name a sign-in was tried with (never the password).

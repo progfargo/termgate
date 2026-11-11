@@ -1,0 +1,51 @@
+.label {
+    display: inline-block;
+    padding: var(--u1) var(--u3);
+    line-height: 1;
+    font-size: var(--f3);
+    text-align: center;
+    white-space: nowrap;
+}
+
+.label-default {
+    background-color: color-mix(in srgb, var(--default) 30%, transparent);
+}
+
+.label-primary {
+    background-color: color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.label-accent {
+    background-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.label-info {
+    background-color: color-mix(in srgb, var(--info) 30%, transparent);
+}
+
+.label-success {
+    background-color: color-mix(in srgb, var(--success) 30%, transparent);
+}
+
+.label-warning {
+    background-color: color-mix(in srgb, var(--warning) 30%, transparent);
+}
+
+.label-error {
+    background-color: color-mix(in srgb, var(--error) 30%, transparent);
+}
+
+.label-xs {
+    padding: var(--u2) var(--u3);
+    font-size: var(--f3);
+}
+
+.label-sm {
+    padding: var(--u2) var(--u4);
+    font-size: var(--f4);
+}
+
+.label-md {
+    padding: var(--u4) var(--u5);
+    font-size: var(--f5);
+}

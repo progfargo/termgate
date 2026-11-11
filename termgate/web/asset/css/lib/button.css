@@ -1,0 +1,247 @@
+.button,
+button {
+    border: none;
+    outline: none;
+    display: inline-block;
+    padding: var(--u2) var(--u4);
+    font-size: var(--f4);
+    text-align: center;
+    white-space: nowrap;
+    border-radius: 6px;
+    background-color: var(--surfaceColor);
+    cursor: pointer;
+    color: var(--textColor);
+
+    i.fa-solid,
+    i.far {
+        margin-right: var(--u2);
+    }
+
+    i.right {
+        margin-right: 0;
+        margin-left: var(--u2);
+    }
+
+    i.left {
+        margin-left: 0;
+        margin-right: var(--u2);
+    }
+}
+
+.button-default {
+    color: var(--textColor);
+    background-color: color-mix(in srgb, var(--surfaceColor) 90%, var(--textColor));
+
+    &.selected {
+        background-color: color-mix(in srgb, var(--surfaceColor) 80%, var(--textColor));
+        font-weight: bold;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.12);
+    }
+
+    &:focus,
+    &:hover {
+        background-color: color-mix(in srgb, var(--surfaceColor) 80%, var(--textColor));
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+}
+
+.button-primary {
+    color: var(--textColor);
+    background-color: var(--primary);
+
+    &.selected {
+        background-color: color-mix(in srgb, var(--primary) 88%, var(--textColor));
+        font-weight: bold;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.12);
+    }
+
+    &:focus,
+    &:hover {
+        background-color: color-mix(in srgb, var(--primary) 88%, var(--textColor));
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+}
+
+.button-accent {
+    color: var(--textColor);
+    background-color: var(--accent);
+
+    &.selected {
+        background-color: color-mix(in srgb, var(--accent) 88%, var(--textColor));
+        font-weight: bold;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.12);
+    }
+
+    &:focus,
+    &:hover {
+        background-color: color-mix(in srgb, var(--accent) 88%, var(--textColor));
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+}
+
+.button-info {
+    color: var(--textColor);
+    background-color: var(--info);
+
+    &.selected {
+        background-color: color-mix(in srgb, var(--info) 88%, var(--textColor));
+        font-weight: bold;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.12);
+    }
+
+    &:focus,
+    &:hover {
+        background-color: color-mix(in srgb, var(--info) 88%, var(--textColor));
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+}
+
+.button-success {
+    color: var(--textColor);
+    background-color: var(--success);
+
+    &.selected {
+        background-color: color-mix(in srgb, var(--success) 88%, var(--textColor));
+        font-weight: bold;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.12);
+    }
+
+    &:focus,
+    &:hover {
+        background-color: color-mix(in srgb, var(--success) 88%, var(--textColor));
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+}
+
+.button-warning {
+    color: var(--textColor);
+    background-color: var(--warning);
+
+    &.selected {
+        background-color: color-mix(in srgb, var(--warning) 88%, var(--textColor));
+        font-weight: bold;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.12);
+    }
+
+    &:focus,
+    &:hover {
+        background-color: color-mix(in srgb, var(--warning) 88%, var(--textColor));
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+}
+
+.button-error {
+    color: var(--textColor);
+    background-color: var(--error);
+
+    &.selected {
+        background-color: color-mix(in srgb, var(--error) 88%, var(--textColor));
+        font-weight: bold;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.12);
+    }
+
+    &:focus,
+    &:hover {
+        background-color: color-mix(in srgb, var(--error) 88%, var(--textColor));
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+}
+
+.button-xs {
+    padding: var(--u2) var(--u3);
+    font-size: var(--f3);
+}
+
+.button-sm {
+    padding: var(--u3) var(--u4);
+    font-size: var(--f4);
+}
+
+.button-md {
+    padding: var(--u4) var(--u5);
+    font-size: var(--f5);
+
+    i.fa-solid {
+        margin-right: var(--u2);
+    }
+}
+
+.button-group-fixed {
+    display: inline-flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+
+    .button {
+        margin: 0 var(--u2) 0 0;
+    }
+
+    .button:last-child {
+        margin-right: 0;
+    }
+}
+
+.button-group-flex {
+    display: inline-flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+
+    * {
+        margin: 0 var(--u2) var(--u1) 0;
+    }
+
+    *:last-child {
+        margin-right: 0;
+    }
+}
+
+.button-bar {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+
+    .button {
+        margin-right: 0;
+        border-radius: 0;
+    }
+
+    & > *:first-child,
+    & > *:first-child .button {
+        border-top-left-radius: 6px;
+        border-bottom-left-radius: 6px;
+    }
+
+    & > *:last-child,
+    & > *:last-child .button {
+        border-top-right-radius: 6px;
+        border-bottom-right-radius: 6px;
+    }
+}
+
+.dropdown-menu {
+    display: inline-block;
+    position: relative;
+}
+
+.dropdown-list {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    padding: var(--u4);
+    border: 1px solid var(--borderColor);
+    border-radius: 6px;
+    background-color: var(--surfaceColor);
+    z-index: 100;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.1);
+
+    a.button {
+        display: block;
+        margin: 0 0 var(--u4) 0;
+
+        &:last-child {
+            margin-bottom: 0;
+        }
+    }
+}

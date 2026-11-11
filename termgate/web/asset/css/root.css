@@ -1,0 +1,152 @@
+body {
+    color: var(--textColor);
+    background-color: var(--bgColor);
+    text-rendering: optimizeLegibility;
+    text-rendering: geometricPrecision;
+    font-family: var(--textFont), Arial, sans-serif;
+    text-rendering: optimizeLegibility !important;
+    font-size: var(--f4);
+}
+
+main {
+    padding: 0;
+    padding-top: 61px;
+    transition: padding-left 0.2s;
+}
+
+/* Middle Size Devices, Tablets */
+@media only screen and (min-width: 768px) {
+    main {
+        padding-left: calc(var(--leftMenuWidth) + var(--u2));
+    }
+}
+
+#main-content {
+    padding-top: var(--u4);
+}
+
+.page-title {
+    margin-bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    .button {
+        margin-right: var(--u4);
+    }
+
+    h3 {
+        margin-top: 0;
+        padding: var(--u3) 0;
+        font-family: var(--titleFont);
+        font-weight: 600;
+        letter-spacing: 1px;
+        color: var(--textColor);
+
+        a {
+            color: var(--textColor);
+            text-decoration: none;
+
+            &:hover {
+                color: var(--grey);
+            }
+        }
+    }
+
+    &.primary h3 { border-left: 3px solid var(--primary); padding-left: var(--u3); }
+    &.warning h3 { border-left: 3px solid var(--orange); padding-left: var(--u3); }
+    &.success h3 { border-left: 3px solid var(--success); padding-left: var(--u3); }
+    &.info h3    { border-left: 3px solid var(--info);    padding-left: var(--u3); }
+    &.error h3   { border-left: 3px solid var(--error);   padding-left: var(--u3); }
+    &.default h3 { border-left: 3px solid var(--grey);    padding-left: var(--u3); }
+}
+
+.row-header {}
+
+.row-footer {
+    padding-bottom: var(--u5);
+}
+
+.row-command {
+    display: flex;
+    align-items: center;
+}
+
+.row-content {
+    margin-top: 0;
+}
+
+.icon-toolbar {
+    display: inline-block;
+    margin-left: var(--u4);
+
+    .icon-link {
+        margin-left: var(--u1);
+        cursor: pointer;
+        color: color-mix(in srgb, var(--grey) 30%, transparent);
+
+        &:hover {
+            color: var(--primary);
+        }
+    }
+}
+
+.copy-clipboard {
+    position: absolute;
+    top: -9999px;
+    left: -9999px;
+}
+
+.confirm-command {
+    margin-top: 0;
+}
+
+.site-message .row {
+    .col:first-child {
+        margin-top: var(--u4);
+    }
+}
+
+span.show-target {
+    display: none;
+}
+
+.hidden {
+    display: none;
+}
+
+/* theme toggle button — sits inside .top-menu, matches the link items */
+.top-menu .theme-toggle {
+    background-color: transparent;
+    padding: 0 var(--u4);
+    color: var(--grey);
+    font-size: inherit;
+    line-height: inherit;
+
+    i.fa-solid {
+        margin-right: 0;
+    }
+
+    .icon-light,
+    .icon-dark {
+        padding-right: 0;
+    }
+
+    &:hover {
+        background-color: transparent;
+        color: var(--textColor);
+    }
+}
+
+/* theme toggle icon swap */
+.icon-dark {
+    display: none;
+}
+
+:root.dark .icon-light {
+    display: none;
+}
+
+:root.dark .icon-dark {
+    display: inline;
+}

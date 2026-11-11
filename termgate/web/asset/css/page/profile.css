@@ -1,0 +1,9 @@
+body#profile-page {
+    .verify-button {
+        margin-left: var(--u3);
+    }
+
+    .button-bar {
+        margin-bottom: var(--u4);
+    }
+}

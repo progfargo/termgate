@@ -1,0 +1,161 @@
+.left-menu {
+    padding-right: 2px;
+    position: fixed;
+    top: var(--u7);
+    left: calc(-1 * var(--leftMenuWidth));
+    width: var(--leftMenuWidth);
+    height: 100%;
+    background-color: var(--leftMenuColor);
+    border-right: 1px solid var(--borderColor);
+    z-index: 100;
+    overflow: auto;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.1);
+    transition: left 0.2s;
+
+    a {
+        display: block;
+        padding: calc(var(--u3) * 1.2) var(--u3);
+        color: var(--textColor);
+        font-size: var(--f4);
+        font-weight: 500;
+
+        i {
+            width: calc(var(--u6) * 0.8);
+            color: color-mix(in srgb, var(--textColor) 88%, transparent);
+
+            &.menu-icon {
+                font-size: var(--f5);
+            }
+        }
+
+        .sub-menu-button {
+            padding: 0 var(--u5) var(--u1) var(--u2);
+            font-size: var(--f5);
+            float: right;
+            color: color-mix(in srgb, var(--textColor) 70%, var(--bgColor));
+            transition: left 0.2s;
+        }
+    }
+
+    nav {
+        margin-top: var(--u5);
+    }
+
+    nav > ul {
+        li {
+            .sub-menu {
+                display: block;
+            }
+
+            a {
+                padding-left: var(--u5);
+            }
+
+            &.active > a {
+                padding-left: calc(var(--u5) - var(--u3));
+                background-color: color-mix(in srgb, var(--leftMenuColor) 96%, var(--textColor));
+                border-left: var(--u3) solid var(--error);
+            }
+
+            & > a:hover {
+                padding-left: calc(var(--u5) - var(--u3));
+                background-color: color-mix(in srgb, var(--leftMenuColor) 96%, var(--textColor));
+                border-left: var(--u3) solid var(--warning);
+            }
+
+            ul {
+                display: none;
+
+                &.sub-menu-show {
+                    display: block;
+                }
+
+                li {
+                    background-color: color-mix(in srgb, var(--leftMenuColor) 92%, var(--textColor));
+
+                    a {
+                        padding-left: var(--u6);
+                    }
+
+                    &.active > a {
+                        padding-left: calc(var(--u6) - var(--u3));
+                        background-color: color-mix(in srgb, var(--leftMenuColor) 92%, var(--textColor));
+                        border-left: var(--u3) solid var(--error);
+                    }
+
+                    & > a:hover {
+                        padding-left: calc(var(--u6) - var(--u3));
+                        background-color: color-mix(in srgb, var(--leftMenuColor) 86%, var(--textColor));
+                        border-left: var(--u3) solid var(--warning);
+                    }
+
+                    ul {
+                        li {
+                            background-color: color-mix(in srgb, var(--leftMenuColor) 86%, var(--textColor));
+
+                            a {
+                                padding-left: var(--u7);
+                            }
+
+                            &.active a {
+                                padding-left: calc(var(--u7) - var(--u3));
+                                background-color: color-mix(in srgb, var(--leftMenuColor) 86%, var(--textColor));
+                                border-left: var(--u3) solid var(--error);
+                            }
+
+                            & > a:hover {
+                                padding-left: calc(var(--u7) - var(--u3));
+                                background-color: color-mix(in srgb, var(--leftMenuColor) 80%, var(--textColor));
+                                border-left: var(--u3) solid var(--warning);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    .logo {
+        margin-top: var(--u6);
+        padding: 0 var(--u4) var(--u4) var(--u5);
+
+        a {
+            padding: 0;
+        }
+
+        img {
+            height: var(--u7);
+        }
+    }
+
+    .user-info {
+        margin-top: var(--u4);
+        margin-left: var(--u5);
+        font-family: monospace;
+
+        p {
+            margin: 0;
+            white-space: nowrap;
+
+            a {
+                display: inline-block;
+                margin-left: var(--u3);
+
+                i:hover {
+                    color: var(--accent);
+                }
+            }
+        }
+    }
+
+    &.left-menu-show {
+        left: 0;
+    }
+}
+
+/* Middle Size Devices, Tablets */
+@media only screen and (min-width: 768px) {
+    .left-menu {
+        left: 0;
+    }
+}

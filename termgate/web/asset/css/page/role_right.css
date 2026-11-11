@@ -1,0 +1,46 @@
+body#role-right-page {
+    table {
+        margin-top: 0;
+
+        tbody {
+            display: none;
+
+            tr:first-child {
+                th {
+                    background-color: color-mix(in srgb, var(--primary) 10%, transparent);
+                }
+            }
+        }
+
+        thead {
+            tr.role-header {
+                border: 1px solid var(--borderColor);
+                cursor: pointer;
+
+                th {
+                    background-color: var(--leftMenuColor);
+
+                    .accordion-icon {
+                        float: right;
+                        font-size: var(--f7);
+                        color: color-mix(in srgb, var(--grey) 80%, var(--textColor));
+
+                        &:hover {
+                            color: color-mix(in srgb, var(--grey) 60%, var(--textColor));
+                        }
+                    }
+
+                    .select-all,
+                    .select-none,
+                    .select-reverse {
+                        display: none;
+                    }
+                }
+            }
+        }
+
+        &:not(:first-of-type) {
+            margin-top: var(--u5);
+        }
+    }
+}

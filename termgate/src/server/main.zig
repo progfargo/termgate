@@ -247,6 +247,7 @@ test {
     _ = systemd;
     _ = @import("auth.zig");
     _ = @import("rpc.zig");
+    _ = @import("api.zig");
     _ = panel_mod;
 }
 

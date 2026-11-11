@@ -1,0 +1,11 @@
+body#fatal-error-page {
+    main {
+        padding: 0;
+        margin: var(--u7) 0;
+    }
+
+    pre {
+        white-space: pre-wrap;
+        word-wrap: break-word;
+    }
+}

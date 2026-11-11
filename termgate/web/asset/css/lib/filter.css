@@ -1,0 +1,44 @@
+.filter-panel {
+    position: fixed;
+    top: var(--u7);
+    right: calc(-1 * var(--leftMenuWidth));
+    width: var(--leftMenuWidth);
+    height: 100%;
+    background-color: var(--leftMenuColor);
+    border-left: 1px solid var(--borderColor);
+    z-index: 100;
+    overflow: auto;
+    padding: var(--u4);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.1);
+    transition: right 0.2s;
+
+    &.filter-panel-show {
+        right: 0;
+    }
+
+    label {
+        display: block;
+        margin-top: var(--u4);
+        margin-bottom: var(--u1);
+        font-weight: 700;
+    }
+
+    .filter-panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: var(--u4);
+        font-weight: 700;
+        font-size: 1.2rem;
+    }
+
+    .filter-panel-body {
+        > div {
+            margin-bottom: var(--u5);
+        }
+
+        .button-group-fixed {
+            margin-top: var(--u3);
+        }
+    }
+}

@@ -1,0 +1,90 @@
+.panel {
+    margin-top: var(--u4);
+
+    .panel-heading {
+        padding: 0;
+        border: 1px solid transparent;
+        border-top-left-radius: 6px;
+        border-top-right-radius: 6px;
+
+        h3 {
+            margin: 0;
+            padding: var(--u3);
+            color: var(--textColor);
+        }
+    }
+
+    .panel-body {
+        padding: var(--u4) var(--u6) var(--u6) var(--u6);
+        background-color: var(--bgColor);
+        border-left: 1px solid transparent;
+        border-right: 1px solid transparent;
+        border-bottom: 1px solid transparent;
+
+        p {
+            margin-top: var(--u4);
+        }
+    }
+
+    .panel-footer {
+        margin: var(--u6) 0;
+        padding: 0 var(--u6);
+        background-color: color-mix(in srgb, var(--grey) 60%, var(--bgColor));
+        border-bottom-right-radius: 6px;
+        border-bottom-left-radius: 6px;
+    }
+}
+
+.panel-default > .panel-heading {
+    border-color: color-mix(in srgb, var(--leftMenuColor) 90%, var(--textColor));
+    background-color: var(--leftMenuColor);
+}
+
+.panel-default .panel-body {
+    border-color: color-mix(in srgb, var(--leftMenuColor) 90%, var(--textColor));
+}
+
+.panel-primary > .panel-heading {
+    border-color: color-mix(in srgb, var(--primary) 88%, var(--textColor));
+    background-color: var(--primary);
+}
+
+.panel-primary .panel-body {
+    border-color: color-mix(in srgb, var(--primary) 88%, var(--textColor));
+}
+
+.panel-success > .panel-heading {
+    border-color: color-mix(in srgb, var(--success) 88%, var(--textColor));
+    background-color: var(--success);
+}
+
+.panel-success .panel-body {
+    border-color: color-mix(in srgb, var(--success) 88%, var(--textColor));
+}
+
+.panel-info > .panel-heading {
+    border-color: color-mix(in srgb, var(--info) 88%, var(--textColor));
+    background-color: var(--info);
+}
+
+.panel-info .panel-body {
+    border-color: color-mix(in srgb, var(--info) 88%, var(--textColor));
+}
+
+.panel-warning > .panel-heading {
+    border-color: color-mix(in srgb, var(--warning) 88%, var(--textColor));
+    background-color: var(--warning);
+}
+
+.panel-warning .panel-body {
+    border-color: color-mix(in srgb, var(--warning) 88%, var(--textColor));
+}
+
+.panel-error > .panel-heading {
+    border-color: color-mix(in srgb, var(--error) 88%, var(--textColor));
+    background-color: var(--error);
+}
+
+.panel-error .panel-body {
+    border-color: color-mix(in srgb, var(--error) 88%, var(--textColor));
+}

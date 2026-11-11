@@ -1,0 +1,11 @@
+body#user-role-page {
+    table {
+        tbody {
+            td {
+                div.revoke-confirm {
+                    display: none;
+                }
+            }
+        }
+    }
+}

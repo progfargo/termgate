@@ -1,0 +1,35 @@
+body#login-page {
+    .bg-layer {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        opacity: 0;
+        transition: opacity 2s;
+        z-index: 0;
+
+        &.bg-layer-active {
+            opacity: 1;
+        }
+    }
+
+    main {
+        position: relative;
+        z-index: 1;
+        margin: 0;
+        padding: 5vh 0 0 0;
+    }
+}
+
+/* Middle Size Devices, Tablets */
+@media only screen and (min-width: 768px) {
+    body#login-page {
+        main {
+            padding-left: 0;
+        }
+    }
+}

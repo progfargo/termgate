@@ -1,0 +1,60 @@
+a {
+    color: var(--linkColor);
+    text-decoration: none;
+}
+
+p {
+    margin-top: var(--u4);
+    line-height: calc(var(--f4) * var(--gold));
+}
+
+h1,
+h2,
+h3,
+h4 {
+    margin-top: var(--u4);
+    font-family: Bitter, Arial, sans-serif;
+    color: inherit;
+}
+
+h1 {
+    font-size: var(--f7);
+    line-height: calc(var(--f7) * var(--gold));
+}
+
+h2 {
+    font-size: var(--f6);
+    line-height: calc(var(--f6) * var(--gold));
+}
+
+h3 {
+    font-size: var(--f5);
+    line-height: calc(var(--f5) * var(--gold));
+}
+
+h4 {
+    font-size: var(--f4);
+    line-height: calc(var(--f4) * var(--gold));
+}
+
+pre,
+code {
+    margin-top: var(--u4);
+    font-family: monospace;
+}
+
+.find {
+    background-color: color-mix(in srgb, var(--error) 40%, var(--bgColor));
+}
+
+.read-more,
+.read-less {
+    margin-top: 0;
+    color: var(--primary);
+    cursor: pointer;
+    text-wrap-mode: nowrap;
+
+    &:hover {
+        font-weight: bold;
+    }
+}

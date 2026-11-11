@@ -108,10 +108,10 @@ pub fn label(b: *app.Buf, kind: []const u8, text: []const u8) void {
 }
 
 /// A form field: label, input; `help` under it.
-pub fn field(b: *app.Buf, id: []const u8, name: []const u8, value: []const u8, opts: struct { required: bool = false, max: usize = 100, help: []const u8 = "", password: bool = false, autofocus: bool = false }) void {
+pub fn field(b: *app.Buf, id: []const u8, name: []const u8, value: []const u8, opts: struct { required: bool = false, max: usize = 100, help: []const u8 = "", password: bool = false }) void {
     b.add("<div class=\"form-group\"><label{s}>{f}</label>", .{ if (opts.required) " class=\"required\"" else "", app.esc(name) });
-    b.add("<input type=\"{s}\" id=\"{s}\" class=\"form-control\" maxlength=\"{d}\" value=\"{f}\"{s}>", .{
-        if (opts.password) "password" else "text", id, opts.max, app.esc(value), if (opts.autofocus) " autofocus" else "",
+    b.add("<input type=\"{s}\" id=\"{s}\" class=\"form-control\" maxlength=\"{d}\" value=\"{f}\">", .{
+        if (opts.password) "password" else "text", id, opts.max, app.esc(value),
     });
     if (opts.help.len > 0) b.add("<span class=\"help-block\">{f}</span>", .{app.esc(opts.help)});
     b.raw("</div>");

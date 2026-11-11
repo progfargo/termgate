@@ -179,7 +179,7 @@ fn renderInsert(name: []const u8) void {
     content.header(&b, &.{ .{ "Users", "#/user" }, .{ "New Record", "" } });
     content.contentStart(&b);
     b.raw("<form>");
-    content.field(&b, "user-name-input", "Name:", name, .{ .required = true, .max = 32, .autofocus = true, .help = "Lowercase letters, digits, _ . -; starts with a letter." });
+    content.field(&b, "user-name-input", "Name:", name, .{ .required = true, .max = 32, .help = "Lowercase letters, digits, _ . -; starts with a letter." });
     b.raw("<p>termgate makes a password, shown once; you hand it over. The user sets up the second step at the first sign-in.</p>");
     b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userInsert\" class=\"button button-primary button-sm\">Submit</button> <a href=\"#/user\" class=\"button button-default button-sm\">Cancel</a></div></div>");
     b.raw("</form>");
@@ -228,7 +228,7 @@ fn renderUpdate(name: []const u8, disabled: bool, own: bool) void {
     content.header(&b, &.{ .{ "Users", "#/user" }, .{ "Edit Record", "" } });
     content.contentStart(&b);
     b.raw("<form>");
-    content.field(&b, "user-name-input", "Name:", name, .{ .required = true, .max = 32, .autofocus = true, .help = "Lowercase letters, digits, _ . -; starts with a letter." });
+    content.field(&b, "user-name-input", "Name:", name, .{ .required = true, .max = 32, .help = "Lowercase letters, digits, _ . -; starts with a letter." });
     // Nobody blocks themselves
     if (!own) content.checkbox(&b, "user-blocked-input", "Blocked: cannot sign in", disabled);
     b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userUpdate\" class=\"button button-primary button-sm\">Submit</button> <a href=\"#/user\" class=\"button button-default button-sm\">Cancel</a></div></div>");

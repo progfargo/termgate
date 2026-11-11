@@ -39,7 +39,7 @@ fn renderPassword(name: []const u8) void {
     var b: app.Buf = .{};
     card(&b);
     b.raw("<form>");
-    b.add("<div class=\"form-group\"><label class=\"required\">Name:</label><input type=\"text\" id=\"login-input\" class=\"form-control\" maxlength=\"32\" tabindex=\"1\" autocomplete=\"username\" autofocus value=\"{f}\"></div>", .{app.esc(name)});
+    b.add("<div class=\"form-group\"><label class=\"required\">Name:</label><input type=\"text\" id=\"login-input\" class=\"form-control\" maxlength=\"32\" tabindex=\"1\" autocomplete=\"username\" value=\"{f}\"></div>", .{app.esc(name)});
     b.raw("<div class=\"form-group\"><label class=\"required\">Password:</label><input type=\"password\" id=\"password-input\" class=\"form-control\" maxlength=\"128\" tabindex=\"2\" autocomplete=\"current-password\"></div>");
     b.raw("<div class=\"form-group form-command\"><button type=\"button\" data-action=\"login\" class=\"button button-primary button-sm\" tabindex=\"3\">Sign in</button></div>");
     b.raw("</form>");
@@ -63,7 +63,7 @@ fn renderCode() void {
         b.add("<p><strong>{f}</strong></p>", .{app.esc(setup_key[0..setup_key_len])});
         b.raw("<p>Then enter the code the app shows.</p>");
     }
-    b.raw("<div class=\"form-group\"><label class=\"required\">Code:</label><input type=\"text\" id=\"code-input\" class=\"form-control\" maxlength=\"6\" tabindex=\"1\" inputmode=\"numeric\" autocomplete=\"one-time-code\" autofocus></div>");
+    b.raw("<div class=\"form-group\"><label class=\"required\">Code:</label><input type=\"text\" id=\"code-input\" class=\"form-control\" maxlength=\"6\" tabindex=\"1\" inputmode=\"numeric\" autocomplete=\"one-time-code\"></div>");
     b.raw("<div class=\"form-group form-command\"><button type=\"button\" data-action=\"loginCode\" class=\"button button-primary button-sm\" tabindex=\"2\">Confirm</button> ");
     b.raw("<button type=\"button\" data-action=\"loginBack\" class=\"button button-default button-sm\" tabindex=\"3\">Back</button></div>");
     b.raw("</form>");

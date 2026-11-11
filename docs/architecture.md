@@ -1,6 +1,6 @@
 # termgate
 
-termgate gives invited people and AI bots terminal access to gateways that cannot accept inbound connections (NAT, CGNAT, cellular links, changing IPs). Access is time-limited or N-use, and every session is audited. Gateways and users only make outbound connections. There is no vendor-operated server; all keys stay with the customer.
+termgate gives users (people and AI bots) terminal access to gateways that cannot accept inbound connections (NAT, CGNAT, cellular links, changing IPs). Access is time-limited or N-use, and every session is audited. Gateways and users only make outbound connections. There is no vendor-operated server; all keys stay with the customer.
 
 termgate is a web application the customer runs on a server: the online authority that approves every session, counts uses, logs sessions and records audit and node status, and the panel where admins and auditors work, each as their own user, from any browser. When termgate is not running, no session can be opened and open ones are ended. The relay keeps no state.
 
@@ -15,7 +15,7 @@ termgate is a web application the customer runs on a server: the online authorit
 - Hardware-bound node identity: a copied binary does not work on another device.
 - Live monitoring of active sessions (read-only mirror) and killing them.
 - Asset management: every node's status (online/offline), last seen time and system info (OS, memory, disk).
-- AI bots access through the same model as people; they publish status and can ask the admin questions.
+- AI bots are users too and access through the same model; they publish status and can ask the admin questions.
 - Audit: session start/end, who, which node, which grant. Recorded by termgate.
 - Session logs: every command of every session and its output (up to a set length), kept for a set number of days. Sessions have a maximum length.
 - Each customer runs separate infrastructure. The vendor has no access.
@@ -40,7 +40,7 @@ The relay process still holds no access-granting key: on its own it can drop tra
 
 ## Identity
 
-The relay runs nats-server with a fixed configuration and **auth callout**: every client connection is put to termgate, which decides who it is and what it may do, and answers with a user JWT for that connection only. Nothing that grants access is stored on nodes or user machines except their own private keys; disabling or deleting a node, or revoking a person's access, closes their open connection at once (termgate finds it in the relay's connection list and asks the relay to close it) and the callout refuses them from then on.
+The relay runs nats-server with a fixed configuration and **auth callout**: every client connection is put to termgate, which decides who it is and what it may do, and answers with a user JWT for that connection only. Nothing that grants access is stored on nodes or user machines except their own private keys; disabling or deleting a node, or a user losing its terminal access (revoked, blocked, or no role with terminal:connect any more), closes their open connection at once (termgate finds it in the relay's connection list and asks the relay to close it) and the callout refuses them from then on.
 
 Identity is checked once per connection, not per message: after the callout, NATS checks every publish and subscribe against that connection's permissions, and TLS keeps anyone from injecting into the connection. Session requests and approvals are signed on top of that.
 
@@ -105,7 +105,7 @@ If termgate is not running, registration waits: tgnode retries every 5 s until t
 
 **Invitation**
 
-An invitation is for one person (or one bot). The admin sets which nodes (name patterns), how many sessions and/or until when. The person gets a single string:
+An invitation gives one user (a person or a bot) terminal access. The admin sets which nodes (name patterns), as which Unix user, how many sessions and/or until when; giving it again replaces what the user had. The user gets a single string:
 
 ```
 tg1-relay.example.com:4222-<CA fingerprint>-<token>
@@ -117,7 +117,7 @@ tg1-relay.example.com:4222-<CA fingerprint>-<token>
 Using it: `tgterm --invite tg1-... ist_kadikoy_gw01`.
 1. tgterm generates the user's key pair.
 2. It connects to the relay with the invitation token as auth token, signing the server nonce with the new key.
-3. The callout checks the token, marks it used and binds the public key to the person and their grant; the connection gets that person's permissions. termgate also sends tgterm the grant.
+3. The callout checks the token, marks it used and binds the public key to the user and its grant; the connection gets that user's permissions. termgate also sends tgterm the grant.
 4. tgterm stores its key, the relay address, the CA and the grant. Later connections use only the key; the callout recognizes it.
 
 If termgate is not running, the connection is refused ("termgate is offline"). The token is useless once used.
@@ -157,8 +157,8 @@ If termgate is not running, the connection is refused ("termgate is offline"). T
 
 **Node status (asset management)**
 - No heartbeat: a node stays connected to the relay, so online means connected. termgate's system connection follows `$SYS.ACCOUNT.APP.CONNECT` / `DISCONNECT`; on any event (at most once a second) and at start it reads the account's connection list (`$SYS.REQ.ACCOUNT.APP.CONNZ`) and marks the nodes in it online. A node going offline keeps that moment as last seen. Without the relay connection termgate shows every node offline.
-- The callout names connections `node:<name>` and `user:<key>` (person names need not be unique), so a person never passes for a node in that list. termgate closes connections by these names (`$SYS.REQ.SERVER.<id>.KICK`).
-- When a node is cut off its open sessions are marked ended in the audit, since it cannot report them; a revoked person's sessions are ended on the nodes, which report them as usual.
+- The callout names connections `node:<name>` and `user:<key>` so a user never passes for a node in that list. termgate closes connections by these names (`$SYS.REQ.SERVER.<id>.KICK`).
+- When a node is cut off its open sessions are marked ended in the audit, since it cannot report them; the sessions of a user who may not connect any more are ended on the nodes, which report them as usual.
 - System info: tgnode publishes `status.<node>` once after connecting and whenever asked (`status.req.<node>`, `status.req.all`); termgate asks all nodes when the Nodes page is opened, at most every 30 s. termgate stores the latest in SQLite.
 - Contents: tgnode version, hostname, OS, kernel, architecture, CPU count, uptime, load average, memory total/available, disk total/free for the root filesystem.
 
@@ -252,14 +252,15 @@ Each binary builds on its own with its own `build.zig` and `build.zig.zon`, and 
   - The superuser is the first user, named `superuser` (`termgate init`): every right. Nobody can change it, block it, delete it, give it a new password, or give or take its roles; it changes its own password in its profile.
   - The role `admin` cannot be deleted, and only the superuser changes it. The last user with the role `admin` cannot be deleted or lose the role.
   - Acting as another user (users.select): a user with the right sees and uses the panel as another user does, with that user's rights, until it goes back (users.unselect); both are checked against its own rights, and only the superuser may act as the superuser. The audit names both ("erdem as veli"). Used to test what a role allows.
-- Menu: Nodes, People, Sessions, Audit, and under the heading Admin: Users, Roles, Configuration, Help, Profile.
+- One kind of user: admins, auditors, terminal users and bots are all users (table `user`), and what each may do comes from its roles. Signing in to the panel is the right panel:login; connecting to nodes with tgterm is terminal:connect (the role terminal_user). A user's terminal access (table `terminal`: nodes, Unix user, limits, its tgterm key) is given on the Users page; the relay lets a user connect only while it is not blocked, its access is not revoked and a role gives it terminal:connect.
+- Menu: Nodes, Sessions, Audit, and under the heading Admin: Users, Roles, Configuration, Help; Profile.
 - Signing in: user name and password, then a 6-digit code from an authenticator app (TOTP, RFC 6238, as in Google Authenticator). The second step is set up at the user's first sign-in: the panel shows a new secret, as a QR code to scan and as text to type, and the first code confirms it. A code is accepted once. Wrong passwords and codes count together: from the fifth in a row the user is locked for 1, 2, 4 ... minutes, at most an hour. An unknown name and a wrong password get the same answer after the same work.
 - Passwords are stored as Argon2id hashes, TOTP secrets encrypted with the log key. A browser session is a random token in an HttpOnly, Secure, SameSite=Strict cookie; the server stores only its hash. It lasts 12 hours; a new password or disabling the user ends its sessions. API calls must carry an `x-termgate` header, which a form on another site cannot set.
 - No sign-up page: users are created by a user with the right, who hands over the generated password (`termgate init` prints the superuser's). No "forgot password" either: an admin resets the user, which gets a new password and sets up its second step again; the reset is recorded in the audit. There is no reset on the server (no command for it), so a password never changes without a record: a customer keeps more than one admin.
 - termgate sends no e-mail to anyone: no mail server to configure. Invitations and node keys are shown in the panel and handed over by the admin.
 - Nodes page: one card per node with status (online/offline), last seen, OS/architecture, memory used/total, disk free/total and tgnode version. Selecting a node opens its info: connection (online, last seen, hardware key, added), full system info with a Refresh button (`status.req.<node>`, also sent when the info opens), its open sessions (with End) and the last 20 sessions, and Disable/Enable, New node key, Delete.
-- Sessions screen: live sessions of people and bots, Watch (read-only, with History), End.
-- Audit screen: every session (selecting one shows its log), and the panel's activity: every change a user made through the panel and every sign-in, failed ones included, with who, when, what (the node, person or user it was about) and whether it was done or denied. Recorded on the server for every changing call, whatever the UI does.
+- Sessions screen: live sessions of users, Watch (read-only, with History), End.
+- Audit screen: every session (selecting one shows its log), and the panel's activity: every change a user made through the panel and every sign-in, failed ones included, with who, when, what (the node or user it was about) and whether it was done or denied. Recorded on the server for every changing call, whatever the UI does.
 - Configuration page: relay, and the session settings (max command output, max session length, keep session logs). The panel at the top right shows who is signed in, with Sign out.
 
 ## Deployment and security boundary
@@ -288,7 +289,7 @@ The main decisions in this work were also made by progfargo:
 - A separate relay per customer, run by the customer.
 - One program for the authority, the panel and the relay.
 - Time-limited and N-use invitations.
-- AI bots accessing and being monitored through the same model as people.
+- AI bots accessing and being monitored as users, through the same model.
 - Naming.
 - Writing everything in Zig, following repeto's discipline.
 

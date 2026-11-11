@@ -18,7 +18,8 @@ var setup_key_len: usize = 0;
 
 pub fn render(_: []const u8) void {
     if (state.signedIn()) return dom.setHash("/");
-    dom.setBodyId("login");
+    // our earlier project's style for the sign-in page (no room for the menu)
+    dom.setBodyId("login-page");
     layout.renderLogin();
     renderPassword("");
 }

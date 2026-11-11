@@ -106,7 +106,7 @@ pub fn browse(query: []const u8) void {
     content.commandEnd(&b);
 
     content.contentStart(&b);
-    b.raw("<table><thead><tr><th>Name</th><th>Status</th><th>Roles</th><th>Terminal</th><th>Created</th>");
+    b.raw("<table><thead><tr><th>Name</th><th>Status</th><th>Roles</th><th>Terminal</th>");
     if (has_command) b.raw("<th class=\"right\">Command</th>");
     b.raw("</tr></thead><tbody>");
     var shown: usize = 0;
@@ -120,7 +120,7 @@ pub fn browse(query: []const u8) void {
         for (u.roles, 0..) |r, i| b.add("{s}{f}", .{ if (i > 0 or u.superuser) ", " else " ", app.esc(r.name) });
         b.raw("</td><td>");
         terminalLabel(&b, u.terminal);
-        b.add("</td><td>{s}</td>", .{content.dateTime(u.created)});
+        b.raw("</td>");
         if (has_command) {
             const own = std.mem.eql(u8, u.name, me.name);
             b.raw("<td class=\"right\"><div class=\"button-group-fixed\">");
@@ -142,7 +142,7 @@ pub fn browse(query: []const u8) void {
         }
         b.raw("</tr>");
     }
-    if (shown == 0) b.add("<tr><td colspan=\"{d}\">Empty list.</td></tr>", .{@as(u8, if (has_command) 6 else 5)});
+    if (shown == 0) b.add("<tr><td colspan=\"{d}\">Empty list.</td></tr>", .{@as(u8, if (has_command) 5 else 4)});
     b.raw("</tbody></table>");
     content.contentEnd(&b);
     show(&b);

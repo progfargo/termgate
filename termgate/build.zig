@@ -166,7 +166,7 @@ pub fn build(b: *std.Build) void {
         const spa_step = b.step("spa", "Build the panel into zig-out/web");
         b.getInstallStep().dependOn(spa_step);
         spa_step.dependOn(&b.addInstallArtifact(spa, .{ .dest_dir = .{ .override = spa_dir } }).step);
-        inline for (.{ "index.html", "boot.js", "zigjs.js", "test.js" }) |f|
+        inline for (.{ "index.html", "boot.js", "zigjs.js", "test.js", "termgate.css" }) |f|
             spa_step.dependOn(&b.addInstallFileWithDir(b.path("web/spa/" ++ f), spa_dir, f).step);
         // Installing the panel as an app (PWA)
         inline for (.{ "manifest.webmanifest", "icon-192.png", "icon-512.png" }) |f|

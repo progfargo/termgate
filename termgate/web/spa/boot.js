@@ -31,8 +31,14 @@
     tg_now() { return Date.now(); },
   };
 
-  // Clipboard, for the panel's Copy buttons
   window.tg = {
+    // The first text field of the page's content gets the focus, without
+    // scrolling the page to it
+    focusFirst() {
+      const f = document.querySelector("#main-content input[type=text], #main-content input[type=password], #main-content textarea");
+      if (f) f.focus({ preventScroll: true });
+    },
+    // Clipboard, for the panel's Copy buttons
     copy(text) {
       if (navigator.clipboard) { navigator.clipboard.writeText(text).catch(() => {}); return; }
       // Not a secure page (plain http on a local name): the old way

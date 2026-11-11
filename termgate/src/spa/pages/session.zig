@@ -1,5 +1,5 @@
-//! Sessions (#/session): the open terminal sessions with End (asks first)
-//! and the last ones; a session's log (#/session/log: the commands typed
+//! Sessions (#/session): every session, open and ended, searched and
+//! paged; an open one can be watched and ended. A session's log (#/session/log: the commands typed
 //! and their output). Watching a session live is #/session/watch
 //! (watch.zig).
 
@@ -27,32 +27,25 @@ fn list(path: []const u8, args: []const u8) []const Session {
     return fetch.fieldAs([]const Session, answer, "data") orelse &.{};
 }
 
-/// A table of sessions; `open`: with the buttons of open ones.
-pub fn table(b: *app.Buf, sessions: []const Session, open: bool) void {
-    tableFind(b, sessions, open, "");
-}
-
-/// The same, the search word `key` marked in the node and user names.
-pub fn tableFind(b: *app.Buf, sessions: []const Session, open: bool, key: []const u8) void {
+/// The sessions, open and ended, the search word `key` marked in the node
+/// and user names; an open one has Watch and End.
+fn table(b: *app.Buf, sessions: []const Session, key: []const u8) void {
     const can_watch = state.can("session", "watch");
     const can_end = state.can("session", "end");
     const can_log = state.can("session", "log");
-    b.raw("<table><thead><tr><th>Node</th><th>User</th><th>Started</th>");
-    if (!open) b.raw("<th>Ended</th>");
-    b.raw("<th class=\"right\">Command</th></tr></thead><tbody>");
-    if (sessions.len == 0) b.add("<tr><td colspan=\"{d}\">{s}</td></tr>", .{ @as(u8, if (open) 4 else 5), if (open) "No open sessions." else "Empty list." });
+    b.raw("<table><thead><tr><th>Node</th><th>User</th><th class=\"center\">Status</th><th>Started</th><th>Ended</th><th class=\"right\">Command</th></tr></thead><tbody>");
+    if (sessions.len == 0) b.raw("<tr><td colspan=\"6\">Empty list.</td></tr>");
     for (sessions) |s| {
+        const open = s.ended == null;
         b.raw("<tr><td>");
         content.find(b, s.node, key);
         b.raw("</td><td>");
         content.find(b, s.user, key);
-        b.add("</td><td>{s}</td>", .{content.dateTime(s.started)});
-        if (!open) {
-            b.add("<td>{s}", .{if (s.ended) |e| content.dateTime(e) else "open"});
-            if (s.exit_status) |x| b.add(" <small>(exit {d})</small>", .{x});
-            b.raw("</td>");
-        }
-        b.raw("<td class=\"right\"><div class=\"button-group-fixed\">");
+        b.raw("</td><td class=\"center\">");
+        if (open) content.label(b, "success", "open") else content.label(b, "default", "ended");
+        b.add("</td><td>{s}</td><td>{s}", .{ content.dateTime(s.started), if (s.ended) |e| content.dateTime(e) else "-" });
+        if (s.exit_status) |x| b.add(" <small>(exit {d})</small>", .{x});
+        b.raw("</td><td class=\"right\"><div class=\"button-group-fixed\">");
         if (open and can_watch) b.add("<a href=\"{f}\" class=\"button button-primary button-xs\">Watch</a>", .{app.esc(sessionUrl("#/session/watch", s, true))});
         if (can_log) b.add("<a href=\"{f}\" class=\"button button-default button-xs\">Log</a>", .{app.esc(sessionUrl("#/session/log", s, false))});
         if (open and can_end) b.add("<button type=\"button\" data-action=\"sessionEnd\" data-sid=\"{s}\" data-node=\"{f}\" data-key=\"{f}\" class=\"button button-error button-xs\">End</button>", .{ s.sid, app.esc(s.node), app.esc(s.user_key) });
@@ -60,7 +53,6 @@ pub fn tableFind(b: *app.Buf, sessions: []const Session, open: bool, key: []cons
     }
     b.raw("</tbody></table>");
 }
-
 
 // The list's state in the address (lib/cargo.zig): search word, page
 var cg: CargoList = .{};
@@ -117,13 +109,9 @@ pub fn browse(query: []const u8) void {
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Sessions", "" }});
     content.commandStart(&b);
-    content.commandEndNote(&b, "{d} open", .{open.len});
+    content.commandEndNote(&b, "{d} sessions · {d} open", .{ recent.total, open.len });
     content.contentStart(&b);
-    table(&b, open, true);
-    content.contentEnd(&b);
-    b.add("<div class=\"row row-header\"><div class=\"col\"><div class=\"page-title\"><h3>All sessions <small>({d})</small></h3></div></div></div>", .{recent.total});
-    content.contentStart(&b);
-    tableFind(&b, recent.rows, false, key);
+    table(&b, recent.rows, key);
     content.contentEnd(&b);
     content.ruler(&b, recent.pages, recent.page, "sessionGoPage");
     content.show(&b);

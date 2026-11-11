@@ -168,7 +168,7 @@ pub fn browse(query: []const u8) void {
     content.commandEnd(&b);
 
     content.contentStart(&b);
-    b.raw("<table><thead><tr><th>Name</th><th>Status</th><th>Roles</th><th>Terminal</th>");
+    b.raw("<table><thead><tr><th>Name</th><th class=\"center\">Status</th><th>Roles</th><th class=\"center\">Terminal</th>");
     if (has_command) b.raw("<th class=\"right\">Command</th>");
     b.raw("</tr></thead><tbody>");
     var shown: usize = 0;
@@ -176,12 +176,12 @@ pub fn browse(query: []const u8) void {
         shown += 1;
         b.raw("<tr><td>");
         content.find(&b, u.name, key);
-        b.raw("</td><td>");
+        b.raw("</td><td class=\"center\">");
         status(&b, u);
         b.raw("</td><td>");
         if (u.superuser) content.label(&b, "primary", "superuser");
         for (u.roles, 0..) |r, i| b.add("{s}{f}", .{ if (i > 0 or u.superuser) ", " else " ", app.esc(r.name) });
-        b.raw("</td><td>");
+        b.raw("</td><td class=\"center\">");
         terminalLabel(&b, u.terminal);
         b.raw("</td>");
         if (has_command) {

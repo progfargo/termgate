@@ -169,7 +169,7 @@ pub fn browse(query: []const u8) void {
     if (state.can("node", "insert")) b.raw("<a href=\"#/node/insert\" class=\"button button-default button-sm\">New</a>");
     content.commandEndNote(&b, "{d} nodes · {d} online · {d} waiting for approval{s}", .{ sum.total, sum.online, sum.pending, if (key.len > 0) std.fmt.allocPrint(app.arena(), " · {d} found", .{page.total}) catch "" else "" });
     content.contentStart(&b);
-    b.raw("<table><thead><tr><th>Name</th><th>State</th><th>Last seen</th><th>System</th><th class=\"right\">Command</th></tr></thead><tbody>");
+    b.raw("<table><thead><tr><th>Name</th><th class=\"center\">State</th><th>Last seen</th><th>System</th><th class=\"right\">Command</th></tr></thead><tbody>");
     if (list.len == 0) b.raw("<tr><td colspan=\"5\">Empty list.</td></tr>");
     for (list) |n| {
         b.add("<tr><td><a href=\"{s}\">", .{nodeUrl("#/node/display", n.id)});
@@ -180,7 +180,7 @@ pub fn browse(query: []const u8) void {
             content.find(&b, n.description, key);
             b.raw("</small>");
         }
-        b.raw("</td><td>");
+        b.raw("</td><td class=\"center\">");
         stateLabel(&b, n);
         b.add("</td><td>{s}</td><td>", .{if (std.mem.eql(u8, n.state, "approved")) ago(n.last_seen) else "-"});
         if (statusOf(n)) |st| {

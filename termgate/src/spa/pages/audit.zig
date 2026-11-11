@@ -60,7 +60,7 @@ pub fn browse(query: []const u8) void {
     content.commandStart(&b);
     content.commandEndNote(&b, "{d} entries{s}", .{ page.total, if (key.len > 0) " found" else "" });
     content.contentStart(&b);
-    b.raw("<table><thead><tr><th>When</th><th>Who</th><th>What</th><th>About</th><th>Result</th></tr></thead><tbody>");
+    b.raw("<table><thead><tr><th>When</th><th>Who</th><th>What</th><th>About</th><th class=\"center\">Result</th></tr></thead><tbody>");
     if (page.rows.len == 0) b.raw("<tr><td colspan=\"5\">Empty list.</td></tr>");
     for (page.rows) |x| {
         b.add("<tr><td>{s}</td><td>", .{content.dateTime(x.at)});
@@ -69,7 +69,7 @@ pub fn browse(query: []const u8) void {
         content.find(&b, x.call, key);
         b.raw("</td><td>");
         content.find(&b, x.detail, key);
-        b.raw("</td><td>");
+        b.raw("</td><td class=\"center\">");
         if (x.ok) content.label(&b, "success", "done") else content.label(&b, "error", "denied");
         b.raw("</td></tr>");
     }

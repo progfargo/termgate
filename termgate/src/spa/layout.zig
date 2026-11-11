@@ -13,6 +13,7 @@ const default_layout =
     \\<div class="left-menu-button" id="left-menu-btn" data-action="toggleSidebar"><i class="fa fa-bars"></i></div>
     \\<div class="site-title"><h1><a href="#/">term<span>gate</span></a></h1></div>
     \\<div class="top-menu" id="top-menu"></div>
+    \\<div id="search"></div>
     \\</header>
     \\<main><div class="site-message" id="site-message"></div><div id="main-content"></div></main>
 ;
@@ -35,6 +36,8 @@ pub fn renderDefault(active: []const u8) void {
         current = .default;
     }
     dom.setHtml("site-message", "");
+    // A list page puts its search box back (content.search)
+    dom.setHtml("search", "");
     leftMenu(active);
     userInfo();
 }

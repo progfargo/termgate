@@ -898,6 +898,52 @@ pub const Db = struct {
         return list.toOwnedSlice(a);
     }
 
+    /// The panel's actions, newest first, a page at a time; `key` (may be
+    /// empty) is looked for in who, the call and what it was about.
+    pub fn actionsSearch(db: *Db, a: std.mem.Allocator, key: []const u8, page: i64) !Page(Action) {
+        const cond = " where (?1 = '' or instr(lower(user), lower(?1)) > 0 or instr(lower(call), lower(?1)) > 0 or instr(lower(detail), lower(?1)) > 0)";
+        const p = try db.pageOf("select count(*) from action" ++ cond, key, page);
+        var st = try Stmt.prepare(db, "select actionId, at, user, call, detail, ok from action" ++ cond ++ " order by actionId desc limit ?2 offset ?3");
+        defer st.finalize();
+        try st.bindText(1, key);
+        try st.bindInt(2, page_len);
+        try st.bindInt(3, p.offset);
+        var list: std.ArrayList(Action) = .empty;
+        while (try st.step()) try list.append(a, .{
+            .id = st.int(0),
+            .at = st.int(1),
+            .user = try st.text(a, 2),
+            .call = try st.text(a, 3),
+            .detail = try st.text(a, 4),
+            .ok = st.int(5) != 0,
+        });
+        return .{ .rows = try list.toOwnedSlice(a), .total = p.total, .page = p.page, .pages = p.pages };
+    }
+
+    // --- pages of a list ------------------------------------------------------
+
+    /// Rows a page of a list shows
+    pub const page_len: i64 = 20;
+
+    /// A page of a list: its rows, how many there are in all, which page it
+    /// is (from 1) and how many pages there are.
+    pub fn Page(comptime T: type) type {
+        return struct { rows: []T, total: i64, page: i64, pages: i64 };
+    }
+
+    /// Counts the rows (`count_sql` takes the key as ?1) and fits `page`
+    /// to them: the first page below 1, the last above the end.
+    fn pageOf(db: *Db, count_sql: [:0]const u8, key: []const u8, page: i64) Error!struct { total: i64, page: i64, pages: i64, offset: i64 } {
+        var st = try Stmt.prepare(db, count_sql);
+        defer st.finalize();
+        try st.bindText(1, key);
+        _ = try st.step();
+        const total = st.int(0);
+        const pages = @max(1, @divFloor(total + page_len - 1, page_len));
+        const p = std.math.clamp(page, 1, pages);
+        return .{ .total = total, .page = p, .pages = pages, .offset = (p - 1) * page_len };
+    }
+
     // --- settings -----------------------------------------------------------
 
     pub fn settingsGet(db: *Db) Error!Settings {
@@ -1063,6 +1109,29 @@ pub const Db = struct {
     }
 
     /// All nodes by name.
+    /// Nodes by name, a page at a time; `key` (may be empty) is looked for
+    /// in the name and the description.
+    pub fn nodeSearch(db: *Db, a: std.mem.Allocator, key: []const u8, page: i64) !Page(Node) {
+        const cond = " where (?1 = '' or instr(lower(name), lower(?1)) > 0 or instr(lower(description), lower(?1)) > 0)";
+        const p = try db.pageOf("select count(*) from node" ++ cond, key, page);
+        var st = try Stmt.prepare(db, node_select ++ cond ++ " order by name limit ?2 offset ?3");
+        defer st.finalize();
+        try st.bindText(1, key);
+        try st.bindInt(2, page_len);
+        try st.bindInt(3, p.offset);
+        var list: std.ArrayList(Node) = .empty;
+        while (try st.step()) try list.append(a, try st.node(a));
+        return .{ .rows = try list.toOwnedSlice(a), .total = p.total, .page = p.page, .pages = p.pages };
+    }
+
+    /// How many nodes there are, are online and wait for approval.
+    pub fn nodeSummary(db: *Db) Error!struct { total: i64, online: i64, pending: i64 } {
+        var st = try Stmt.prepare(db, "select count(*), coalesce(sum(online), 0), coalesce(sum(state = 'pending'), 0) from node");
+        defer st.finalize();
+        _ = try st.step();
+        return .{ .total = st.int(0), .online = st.int(1), .pending = st.int(2) };
+    }
+
     pub fn nodeList(db: *Db, a: std.mem.Allocator) ![]Node {
         var st = try Stmt.prepare(db, node_select ++ " order by name");
         defer st.finalize();
@@ -1472,6 +1541,34 @@ pub const Db = struct {
     /// The latest sessions (audit view), newest first.
     pub fn sessionsRecent(db: *Db, a: std.mem.Allocator, limit: i64) ![]Session {
         return db.sessionQuery(a, session_select ++ " order by started desc, sessionId desc limit ?", limit);
+    }
+
+    /// Sessions, newest first, a page at a time; `key` (may be empty) is
+    /// looked for in the node's and the user's name.
+    pub fn sessionsSearch(db: *Db, a: std.mem.Allocator, key: []const u8, page: i64) !Page(Session) {
+        const cond = " where (?1 = '' or instr(lower(node), lower(?1)) > 0 or instr(lower(userName), lower(?1)) > 0)";
+        const p = try db.pageOf("select count(*) from session" ++ cond, key, page);
+        var st = try Stmt.prepare(db, session_select ++ cond ++ " order by started desc, sessionId desc limit ?2 offset ?3");
+        defer st.finalize();
+        try st.bindText(1, key);
+        try st.bindInt(2, page_len);
+        try st.bindInt(3, p.offset);
+        var list: std.ArrayList(Session) = .empty;
+        while (try st.step()) try list.append(a, try sessionRow(&st, a));
+        return .{ .rows = try list.toOwnedSlice(a), .total = p.total, .page = p.page, .pages = p.pages };
+    }
+
+    fn sessionRow(st: *Stmt, a: std.mem.Allocator) !Session {
+        return .{
+            .sid = try st.text(a, 0),
+            .node = try st.text(a, 1),
+            .user_key = try st.text(a, 2),
+            .user = try st.text(a, 3),
+            .grant_jti = try st.text(a, 4),
+            .started = st.int(5),
+            .ended = st.optInt(6),
+            .exit_status = st.optInt(7),
+        };
     }
 
     /// The latest sessions on one node, newest first.
@@ -2096,4 +2193,40 @@ test "rights from before the split: each role keeps what it could do" {
     // A blocked user is not acted as
     try db.userSetDisabled(other, true);
     try testing.expectEqual(@as(?i64, null), (try db.webSessionGet("T", 2)).?.effective_user_id);
+}
+
+test "lists a page at a time, with a search" {
+    var db = try testDb();
+    defer db.close();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // 45 nodes: 30 in Istanbul, 15 pumps
+    for (0..45) |i| {
+        const name = try std.fmt.allocPrint(a, "{s}{d:0>2}", .{ if (i < 30) "ist_gw" else "pump", i });
+        _ = try db.nodeCreate(name, if (i == 44) "Ankara station" else "", &tokenHash(name), t0 + 10, t0);
+    }
+    const first = try db.nodeSearch(a, "", 1);
+    try testing.expectEqual(@as(i64, 45), first.total);
+    try testing.expectEqual(@as(i64, 3), first.pages);
+    try testing.expectEqual(@as(usize, 20), first.rows.len);
+    try testing.expectEqualStrings("ist_gw00", first.rows[0].name);
+    // Past the end: the last page
+    const last = try db.nodeSearch(a, "", 9);
+    try testing.expectEqual(@as(i64, 3), last.page);
+    try testing.expectEqual(@as(usize, 5), last.rows.len);
+    // A search in names and descriptions, without regard to case
+    try testing.expectEqual(@as(i64, 15), (try db.nodeSearch(a, "PUMP", 1)).total);
+    const ankara = try db.nodeSearch(a, "ankara", 1);
+    try testing.expectEqual(@as(usize, 1), ankara.rows.len);
+    try testing.expectEqualStrings("pump44", ankara.rows[0].name);
+    // A search with no rows: one empty page
+    const none = try db.nodeSearch(a, "x%_", 1);
+    try testing.expectEqual(@as(i64, 0), none.total);
+    try testing.expectEqual(@as(i64, 1), none.pages);
+    try testing.expectEqual(@as(i64, 45), (try db.nodeSummary()).total);
+    // Actions likewise
+    for (0..25) |i| try db.actionAdd(t0 + @as(i64, @intCast(i)), if (i % 5 == 0) "veli" else "superuser", "db.nodeCreate", "x", true);
+    try testing.expectEqual(@as(i64, 5), (try db.actionsSearch(a, "veli", 1)).total);
+    try testing.expectEqual(@as(i64, 2), (try db.actionsSearch(a, "", 1)).pages);
 }

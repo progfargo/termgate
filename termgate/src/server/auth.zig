@@ -268,23 +268,45 @@ fn userCall(auth: *Auth, a: std.mem.Allocator, name: []const u8, body: []const u
 
     if (std.mem.eql(u8, name, "list")) {
         if (!c.can("user", "browse")) return fail(a, .forbidden, no_right);
-        const list = try db.userList(a);
+        // A page of the users, by a search in the name, a role and a
+        // status (active, new: not signed in yet, blocked), as our earlier project's
+        // `id`: that user only (a page about one user)
+        const Filter = struct { id: i64 = 0, key: []const u8 = "", rid: i64 = 0, stat: []const u8 = "", pn: i64 = 1 };
+        const f = std.json.parseFromSliceLeaky(Filter, a, body, .{ .ignore_unknown_fields = true }) catch Filter{};
         const Row = struct { id: i64, name: []const u8, superuser: bool, disabled: bool, second_step: bool, created: i64, roles: []const dbm.RoleRef, terminal: ?dbm.Terminal };
-        const rows = try a.alloc(Row, list.len);
+        var rows: std.ArrayList(Row) = .empty;
         // A user's roles are shown to who may see them
         const see_roles = c.can("user", "role_browse");
-        for (list, rows) |x, *r| r.* = .{
-            .id = x.id,
-            .name = x.name,
-            .superuser = x.is_superuser,
-            .disabled = x.disabled,
-            .second_step = x.totp_confirmed,
-            .created = x.created,
-            .roles = if (see_roles) try db.userRoles(a, x.id) else &.{},
-            // Its terminal access, if one was given
-            .terminal = try db.terminalGet(a, x.id),
-        };
-        return .{ .body = try json(a, .{ .users = rows }) };
+        for (try db.userList(a)) |x| {
+            if (f.id != 0 and x.id != f.id) continue;
+            if (f.key.len > 0 and std.ascii.findIgnoreCase(x.name, f.key) == null) continue;
+            if (std.mem.eql(u8, f.stat, "active") and (x.disabled or (auth.second_step and !x.totp_confirmed))) continue;
+            if (std.mem.eql(u8, f.stat, "new") and (x.disabled or x.totp_confirmed)) continue;
+            if (std.mem.eql(u8, f.stat, "blocked") and !x.disabled) continue;
+            const roles = try db.userRoles(a, x.id);
+            if (f.rid != 0) {
+                var has = false;
+                for (roles) |r| has = has or r.id == f.rid;
+                if (!has) continue;
+            }
+            try rows.append(a, .{
+                .id = x.id,
+                .name = x.name,
+                .superuser = x.is_superuser,
+                .disabled = x.disabled,
+                .second_step = x.totp_confirmed,
+                .created = x.created,
+                .roles = if (see_roles) roles else &.{},
+                // Its terminal access, if one was given
+                .terminal = try db.terminalGet(a, x.id),
+            });
+        }
+        const total: i64 = @intCast(rows.items.len);
+        const pages = @max(1, @divFloor(total + dbm.Db.page_len - 1, dbm.Db.page_len));
+        const page = std.math.clamp(f.pn, 1, pages);
+        const from: usize = @intCast((page - 1) * dbm.Db.page_len);
+        const to = @min(rows.items.len, from + @as(usize, @intCast(dbm.Db.page_len)));
+        return .{ .body = try json(a, .{ .users = rows.items[from..to], .total = total, .page = page, .pages = pages }) };
     }
     if (std.mem.eql(u8, name, "create")) {
         if (!c.can("user", "insert")) return fail(a, .forbidden, no_right);

@@ -35,13 +35,18 @@ const Terminal = struct {
 const User = struct { id: i64, name: []const u8, superuser: bool = false, disabled: bool = false, second_step: bool = false, created: i64 = 0, roles: []const RoleRef = &.{}, terminal: ?Terminal = null };
 const Role = struct { id: i64, name: []const u8, description: []const u8 = "", user_count: i64 = 0 };
 
-fn users() ?[]const User {
-    const answer = fetch.postRaw("user/browse", "{}") orelse return null;
-    return fetch.fieldAs([]const User, answer, "users");
+const UserPage = struct { users: []const User = &.{}, total: i64 = 0, page: i64 = 1, pages: i64 = 1 };
+
+/// A page of the users, by a search word, a role and a status
+fn users(key: []const u8, rid: i64, stat: []const u8, page: i64) ?UserPage {
+    const answer = fetch.post("user/browse", .{ .key = key, .rid = rid, .stat = stat, .pn = page }) orelse return null;
+    return std.json.parseFromValueLeaky(UserPage, app.arena(), answer, .{ .ignore_unknown_fields = true }) catch null;
 }
 
 fn userById(id: i64) ?User {
-    for (users() orelse return null) |u| if (u.id == id) return u;
+    const answer = fetch.post("user/browse", .{ .id = id }) orelse return null;
+    const list = fetch.fieldAs([]const User, answer, "users") orelse &.{};
+    if (list.len == 1) return list[0];
     router.renderNotFound();
     return null;
 }
@@ -69,20 +74,23 @@ fn status(b: *app.Buf, u: User) void {
 
 // --- Browse -------------------------------------------------------------------
 
-/// Filters of the list, kept while the page is open (rid: role, stat:
-/// active, blocked, new)
+/// The list's filters, from its address (key: a search word, rid: a role,
+/// stat: active, new, blocked)
 var filter_role: i64 = 0;
 var filter_status: []const u8 = "default";
-var filter_status_buf: [16]u8 = undefined;
 
 pub fn browse(query: []const u8) void {
     if (!state.can("user", "browse")) return router.renderBadRequest();
     begin();
-    if (query.len > 0) {
-        filter_role = app.queryInt(query, "rid");
-        setStatus(app.queryValue(query, "stat"));
-    }
-    const list = users() orelse return;
+    const key = app.queryValue(query, "key");
+    filter_role = app.queryInt(query, "rid");
+    filter_status = app.queryValue(query, "stat");
+    if (filter_status.len == 0) filter_status = "default";
+    // The search and the page numbers keep the filters
+    const path = std.fmt.allocPrint(app.arena(), "/user?rid={d}&stat={s}", .{ filter_role, app.urlEncode(filter_status) }) catch "/user";
+    content.search(path, key);
+    const page = users(key, filter_role, if (std.mem.eql(u8, filter_status, "default")) "" else filter_status, @max(1, app.queryInt(query, "pn"))) orelse return;
+    const list = page.users;
     const all_roles = if (state.can("user", "role_browse")) roles() else &.{};
     const me = state.user.?;
     const can_select = me.can_select and me.real == null;
@@ -102,7 +110,7 @@ pub fn browse(query: []const u8) void {
     for ([_][2][]const u8{ .{ "default", "All statuses" }, .{ "active", "Active" }, .{ "new", "Not signed in yet" }, .{ "blocked", "Blocked" } }) |o|
         b.add("<option value=\"{s}\"{s}>{s}</option>", .{ o[0], if (std.mem.eql(u8, o[0], filter_status)) " selected" else "", o[1] });
     b.raw("</select></div></form>");
-    b.raw("<a href=\"#/user?rid=0&stat=default\" class=\"button button-default button-sm\" title=\"Reset all filters.\">Clear</a>");
+    b.raw("<a href=\"#/user\" class=\"button button-default button-sm\" title=\"Reset all filters.\">Clear</a>");
     content.commandEnd(&b);
 
     content.contentStart(&b);
@@ -111,9 +119,10 @@ pub fn browse(query: []const u8) void {
     b.raw("</tr></thead><tbody>");
     var shown: usize = 0;
     for (list) |u| {
-        if (!matches(u)) continue;
         shown += 1;
-        b.add("<tr><td>{f}</td><td>", .{app.esc(u.name)});
+        b.raw("<tr><td>");
+        content.find(&b, u.name, key);
+        b.raw("</td><td>");
         status(&b, u);
         b.raw("</td><td>");
         if (u.superuser) content.label(&b, "primary", "superuser");
@@ -145,25 +154,8 @@ pub fn browse(query: []const u8) void {
     if (shown == 0) b.add("<tr><td colspan=\"{d}\">Empty list.</td></tr>", .{@as(u8, if (has_command) 5 else 4)});
     b.raw("</tbody></table>");
     content.contentEnd(&b);
+    content.ruler(&b, path, key, page.page, page.pages);
     show(&b);
-}
-
-fn setStatus(s: []const u8) void {
-    const n = @min(s.len, filter_status_buf.len);
-    @memcpy(filter_status_buf[0..n], s[0..n]);
-    filter_status = if (n == 0) "default" else filter_status_buf[0..n];
-}
-
-fn matches(u: User) bool {
-    if (filter_role != 0) {
-        var has = false;
-        for (u.roles) |r| has = has or r.id == filter_role;
-        if (!has) return false;
-    }
-    if (std.mem.eql(u8, filter_status, "active")) return !u.disabled and u.second_step;
-    if (std.mem.eql(u8, filter_status, "new")) return !u.disabled and !u.second_step;
-    if (std.mem.eql(u8, filter_status, "blocked")) return u.disabled;
-    return true;
 }
 
 /// A filter was changed
@@ -171,7 +163,7 @@ pub fn filter(f: Form) void {
     // The filter that changed; the other one stays as it is
     const rid = if (f.str("user-rid-select").len > 0) f.int("user-rid-select") else filter_role;
     const stat = if (f.str("user-stat-select").len > 0) f.str("user-stat-select") else filter_status;
-    router.go(std.fmt.allocPrint(app.arena(), "/user?rid={d}&stat={s}", .{ rid, stat }) catch return);
+    router.go(std.fmt.allocPrint(app.arena(), "/user?rid={d}&stat={s}&pn=1", .{ rid, app.urlEncode(stat) }) catch return);
 }
 
 // --- Insert -------------------------------------------------------------------
@@ -500,7 +492,7 @@ pub fn submitTerminalInvite(f: Form) void {
     content.header(&b, &.{ .{ "Users", "#/user" }, .{ u.name, "" }, .{ "Invitation", "" } });
     content.contentStart(&b);
     b.add("<p>Shown once. Hand it to <strong>{f}</strong>: it runs this once, within 7 days, on its own machine; tgterm makes its key there. After that \"tgterm &lt;node&gt;\" is enough.</p>", .{app.esc(u.name)});
-    b.add("<pre class=\"code\">{f}</pre>", .{app.esc(command)});
+    b.add("<pre>{f}</pre>", .{app.esc(command)});
     content.contentEnd(&b);
     content.commandStart(&b);
     b.add("<button type=\"button\" data-action=\"copy\" data-text=\"{f}\" class=\"button button-default button-sm\"><i class=\"fa fa-copy\"></i> Copy</button>", .{app.esc(command)});

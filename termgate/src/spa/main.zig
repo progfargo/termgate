@@ -61,6 +61,7 @@ const actions = [_]Action{
     .{ .name = "loginBack", .run = login.back },
     .{ .name = "logout", .run = login.logout },
     .{ .name = "copy", .run = user.copy },
+    .{ .name = "search", .run = search },
     .{ .name = "userFilter", .run = user.filter },
     .{ .name = "userInsert", .run = user.submitInsert },
     .{ .name = "userUpdate", .run = user.submitUpdate },
@@ -87,6 +88,14 @@ const actions = [_]Action{
     .{ .name = "sessionEnd", .run = session.end },
     .{ .name = "configUpdate", .run = config.submit },
 };
+
+/// The header's search box: the list at data-path, with the word, from
+/// its first page.
+fn search(f: Form) void {
+    const path = f.str("path");
+    const sep: []const u8 = if (std.mem.indexOfScalar(u8, path, '?') != null) "&" else "?";
+    router.go(std.fmt.allocPrint(app.arena(), "{s}{s}key={s}&pn=1", .{ path, sep, app.urlEncode(f.trimmed("key")) }) catch return);
+}
 
 /// The first page the user may open, in the menu's order.
 fn home() []const u8 {

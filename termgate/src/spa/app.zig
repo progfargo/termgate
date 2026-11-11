@@ -66,18 +66,54 @@ pub const Escaped = struct {
     }
 };
 
-/// The query of a hash ("id=3&key=x"): a value by name, "" if not there.
+/// The query of a hash ("id=3&key=x"): a value by name, "" if not there;
+/// %xx decoded.
 pub fn queryValue(query: []const u8, name: []const u8) []const u8 {
     var it = std.mem.splitScalar(u8, query, '&');
     while (it.next()) |kv| {
         const eq = std.mem.indexOfScalar(u8, kv, '=') orelse continue;
-        if (std.mem.eql(u8, kv[0..eq], name)) return kv[eq + 1 ..];
+        if (std.mem.eql(u8, kv[0..eq], name)) return urlDecode(kv[eq + 1 ..]);
     }
     return "";
 }
 
+/// A value for an address's query: letters, digits and -_.~ as they are,
+/// everything else %xx.
+pub fn urlEncode(text: []const u8) []const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (text) |ch| {
+        if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~') {
+            out.append(arena(), ch) catch return "";
+        } else out.print(arena(), "%{X:0>2}", .{ch}) catch return "";
+    }
+    return out.items;
+}
+
+fn urlDecode(text: []const u8) []const u8 {
+    if (std.mem.indexOfAny(u8, text, "%+") == null) return text;
+    var out: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        if (text[i] == '%' and i + 2 < text.len + 0 and i + 2 <= text.len - 1) {
+            const v = std.fmt.parseInt(u8, text[i + 1 .. i + 3], 16) catch {
+                out.append(arena(), '%') catch return text;
+                continue;
+            };
+            out.append(arena(), v) catch return text;
+            i += 2;
+        } else out.append(arena(), if (text[i] == '+') ' ' else text[i]) catch return text;
+    }
+    return out.items;
+}
+
 pub fn queryInt(query: []const u8, name: []const u8) i64 {
     return std.fmt.parseInt(i64, queryValue(query, name), 10) catch 0;
+}
+
+test "addresses" {
+    try std.testing.expectEqualStrings("ist%20gw%26x", urlEncode("ist gw&x"));
+    try std.testing.expectEqualStrings("ist gw&x", queryValue("pn=2&key=ist%20gw%26x", "key"));
+    try std.testing.expectEqualStrings("2", queryValue("pn=2&key=x", "pn"));
 }
 
 test "escaping" {

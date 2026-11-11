@@ -10,36 +10,38 @@ const fetch = @import("../fetch.zig");
 const layout = @import("../layout.zig");
 const router = @import("../router.zig");
 const content = @import("../content.zig");
-const session = @import("session.zig");
-const node_page = @import("node.zig");
 
 const Action = struct { id: i64, at: i64, user: []const u8 = "", call: []const u8 = "", detail: []const u8 = "", ok: bool = true };
 
-pub fn browse(_: []const u8) void {
+pub fn browse(query: []const u8) void {
     if (!state.can("audit", "browse")) return router.renderBadRequest();
     dom.setBodyId("");
     layout.renderDefault("audit");
-    const answer = fetch.postRaw("audit/browse", "[200]") orelse return;
-    const actions = fetch.fieldAs([]const Action, answer, "data") orelse &.{};
+    const key = app.queryValue(query, "key");
+    content.search("/audit", key);
+    const answer = fetch.post("audit/browse", .{ key, @max(1, app.queryInt(query, "pn")) }) orelse return;
+    const page = fetch.fieldAs(content.Page(Action), answer, "data") orelse content.Page(Action){};
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Audit", "" }});
+    content.commandStart(&b);
+    b.add("<span class=\"label label-default\">{d} entries{s}</span>", .{ page.total, if (key.len > 0) " found" else "" });
+    content.commandEnd(&b);
     content.contentStart(&b);
     b.raw("<table><thead><tr><th>When</th><th>Who</th><th>What</th><th>About</th><th>Result</th></tr></thead><tbody>");
-    if (actions.len == 0) b.raw("<tr><td colspan=\"5\">Empty list.</td></tr>");
-    for (actions) |x| {
-        b.add("<tr><td>{s}</td><td>{f}</td><td>{f}</td><td>{f}</td><td>", .{ content.dateTime(x.at), app.esc(if (x.user.len > 0) x.user else "-"), app.esc(x.call), app.esc(x.detail) });
+    if (page.rows.len == 0) b.raw("<tr><td colspan=\"5\">Empty list.</td></tr>");
+    for (page.rows) |x| {
+        b.add("<tr><td>{s}</td><td>", .{content.dateTime(x.at)});
+        content.find(&b, if (x.user.len > 0) x.user else "-", key);
+        b.raw("</td><td>");
+        content.find(&b, x.call, key);
+        b.raw("</td><td>");
+        content.find(&b, x.detail, key);
+        b.raw("</td><td>");
         if (x.ok) content.label(&b, "success", "done") else content.label(&b, "error", "denied");
         b.raw("</td></tr>");
     }
     b.raw("</tbody></table>");
     content.contentEnd(&b);
-    if (state.can("session", "browse")) {
-        const s = fetch.postRaw("session/recent", "[50]");
-        const sessions = if (s) |v| fetch.fieldAs([]const node_page.Session, v, "data") orelse &.{} else &.{};
-        b.raw("<div class=\"row row-header\"><div class=\"col\"><div class=\"page-title\"><h3>Sessions</h3></div></div></div>");
-        content.contentStart(&b);
-        session.table(&b, sessions, false);
-        content.contentEnd(&b);
-    }
+    content.ruler(&b, "/audit", key, page.page, page.pages);
     content.show(&b);
 }

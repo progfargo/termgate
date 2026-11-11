@@ -36,6 +36,10 @@ const DbCall = struct {
 const db_calls = [_]DbCall{
     .{ .name = "nodeList", .module = "node", .action = "browse" },
     .{ .name = "nodeGet", .module = "node", .action = "browse" },
+    .{ .name = "nodeSearch", .module = "node", .action = "browse" },
+    .{ .name = "nodeSummary", .module = "node", .action = "browse" },
+    .{ .name = "sessionsSearch", .module = "session", .action = "browse" },
+    .{ .name = "actionsSearch", .module = "audit", .action = "browse" },
     .{ .name = "sessionsActive", .module = "session", .action = "browse" },
     .{ .name = "sessionsRecent", .module = "session", .action = "browse" },
     .{ .name = "sessionsOfNode", .module = "session", .action = "browse" },

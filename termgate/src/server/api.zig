@@ -42,7 +42,8 @@ const routes = [_]Route{
     .{ .path = "profile/update_pass", .call = "profile.password" },
     // Nodes (panel.zig, rpc.zig: the database calls take their arguments
     // as a JSON array)
-    .{ .path = "node/browse", .call = "db.nodeList" },
+    .{ .path = "node/browse", .call = "db.nodeSearch" },
+    .{ .path = "node/summary", .call = "db.nodeSummary" },
     .{ .path = "node/get", .call = "db.nodeGet" },
     .{ .path = "node/insert", .call = "nodes.create" },
     .{ .path = "node/new_key", .call = "nodes.newKey" },
@@ -59,14 +60,14 @@ const routes = [_]Route{
     .{ .path = "user/terminal_revoke", .call = "terminal.revoke" },
     // Sessions
     .{ .path = "session/browse", .call = "db.sessionsActive" },
-    .{ .path = "session/recent", .call = "db.sessionsRecent" },
+    .{ .path = "session/recent", .call = "db.sessionsSearch" },
     .{ .path = "session/end", .call = "svc.endSession" },
     .{ .path = "session/log", .call = "log.commands" },
     .{ .path = "session/watch_start", .call = "watch.start" },
     .{ .path = "session/watch_read", .call = "watch.read" },
     .{ .path = "session/watch_stop", .call = "watch.stop" },
     // Audit
-    .{ .path = "audit/browse", .call = "db.actionsRecent" },
+    .{ .path = "audit/browse", .call = "db.actionsSearch" },
     // Configuration
     .{ .path = "config/browse", .call = "db.settingsGet" },
     .{ .path = "config/update", .call = "db.settingsSet" },

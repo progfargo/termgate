@@ -55,10 +55,13 @@ pub const Session = struct {
     exit_status: ?i64 = null,
 };
 
-fn nodes() ?[]const Node {
-    const answer = fetch.postRaw("node/browse", "[]") orelse return null;
-    return fetch.fieldAs([]const Node, answer, "data");
+/// A page of the nodes, by a search word
+fn nodes(key: []const u8, page: i64) ?content.Page(Node) {
+    const answer = fetch.post("node/browse", .{ key, page }) orelse return null;
+    return fetch.fieldAs(content.Page(Node), answer, "data");
 }
+
+const Summary = struct { total: i64 = 0, online: i64 = 0, pending: i64 = 0 };
 
 fn nodeById(id: i64) ?Node {
     const answer = fetch.post("node/get", .{id}) orelse return null;
@@ -103,31 +106,35 @@ pub fn ago(t: ?i64) []const u8 {
 
 // --- Browse -------------------------------------------------------------------
 
-pub fn browse(_: []const u8) void {
+pub fn browse(query: []const u8) void {
     if (!state.can("node", "browse")) return router.renderBadRequest();
     begin();
+    const key = app.queryValue(query, "key");
+    content.search("/node", key);
     // Fresh system info from the online nodes, for the next look
     _ = fetch.postRaw("node/status_all", "[]");
-    const list = nodes() orelse return;
-    var online: usize = 0;
-    var pending: usize = 0;
-    for (list) |n| {
-        if (n.online) online += 1;
-        if (std.mem.eql(u8, n.state, "pending")) pending += 1;
-    }
+    const page = nodes(key, @max(1, app.queryInt(query, "pn"))) orelse return;
+    const list = page.rows;
+    const sum = if (fetch.postRaw("node/summary", "[]")) |s| fetch.fieldAs(Summary, s, "data") orelse Summary{} else Summary{};
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Nodes", "" }});
     content.commandStart(&b);
     if (state.can("node", "insert")) b.raw("<a href=\"#/node/insert\" class=\"button button-default button-sm\">New</a>");
-    b.raw("<a href=\"#/node\" class=\"button button-default button-sm\" title=\"Read again.\"><i class=\"fas fa-rotate fa-fw\"></i></a>");
-    b.add("<span class=\"command-note\">{d} nodes · {d} online · {d} waiting for approval</span>", .{ list.len, online, pending });
+    b.add("<a href=\"#{s}\" class=\"button button-default button-sm\" title=\"Read again.\"><i class=\"fas fa-rotate fa-fw\"></i></a>", .{dom.hash()});
+    b.add("<span class=\"label label-default\">{d} nodes · {d} online · {d} waiting for approval{s}</span>", .{ sum.total, sum.online, sum.pending, if (key.len > 0) std.fmt.allocPrint(app.arena(), " · {d} found", .{page.total}) catch "" else "" });
     content.commandEnd(&b);
     content.contentStart(&b);
     b.raw("<table><thead><tr><th>Name</th><th>State</th><th>Last seen</th><th>System</th><th class=\"right\">Command</th></tr></thead><tbody>");
     if (list.len == 0) b.raw("<tr><td colspan=\"5\">Empty list.</td></tr>");
     for (list) |n| {
-        b.add("<tr><td><a href=\"#/node/display?nodeId={d}\">{f}</a>", .{ n.id, app.esc(n.name) });
-        if (n.description.len > 0) b.add("<br><small>{f}</small>", .{app.esc(n.description)});
+        b.add("<tr><td><a href=\"#/node/display?nodeId={d}\">", .{n.id});
+        content.find(&b, n.name, key);
+        b.raw("</a>");
+        if (n.description.len > 0) {
+            b.raw("<br><small>");
+            content.find(&b, n.description, key);
+            b.raw("</small>");
+        }
         b.raw("</td><td>");
         stateLabel(&b, n);
         b.add("</td><td>{s}</td><td>", .{if (std.mem.eql(u8, n.state, "approved")) ago(n.last_seen) else "-"});
@@ -144,6 +151,7 @@ pub fn browse(_: []const u8) void {
     }
     b.raw("</tbody></table>");
     content.contentEnd(&b);
+    content.ruler(&b, "/node", key, page.page, page.pages);
     content.show(&b);
 }
 
@@ -219,7 +227,7 @@ fn showKey(name: []const u8, key: Key) void {
     content.header(&b, &.{ .{ "Nodes", "#/node" }, .{ name, "" }, .{ "Node Key", "" } });
     content.contentStart(&b);
     b.raw("<p>Run this once on the device, within a day. The device then asks to be approved here.</p>");
-    b.add("<pre class=\"code\">{f}</pre>", .{app.esc(command)});
+    b.add("<pre>{f}</pre>", .{app.esc(command)});
     content.contentEnd(&b);
     content.commandStart(&b);
     b.add("<button type=\"button\" data-action=\"copy\" data-text=\"{f}\" class=\"button button-default button-sm\"><i class=\"fa fa-copy\"></i> Copy</button>", .{app.esc(command)});

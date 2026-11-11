@@ -96,7 +96,13 @@
     await go("#/node/insert");
     fill("node-name-input", "web_gw01");
     await click("[data-action=nodeInsert]");
-    await wait("the node key", () => text("pre.code").startsWith("tgnode --registration tg1-"));
+    await wait("the node key", () => text("pre").startsWith("tgnode --registration tg1-"));
+
+    step = "search";
+    await go("#/node?key=GW0&pn=1");
+    await wait("the node found", () => text(".find") === "gw0" && text("td a").startsWith("web_gw01"));
+    await go("#/node?key=nothing-like-it&pn=1");
+    await wait("nothing found", () => text("td").includes("Empty list."));
 
     step = "user";
     await go("#/user/insert");
@@ -141,7 +147,7 @@
     fill("term-runas-input", "root");
     fill("term-uses-input", "2");
     await click("[data-action=userTerminalInvite]");
-    await wait("the invitation", () => text("pre.code").startsWith("tgterm --invite tg1-"));
+    await wait("the invitation", () => text("pre").startsWith("tgterm --invite tg1-"));
 
     step = "acting as veli";
     await go("#/user");

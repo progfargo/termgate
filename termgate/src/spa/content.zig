@@ -69,12 +69,12 @@ pub fn commandEnd(b: *app.Buf) void {
     b.raw("</div></div></div>");
 }
 
-/// The end of the command row with a note on its right (counts, a state):
-/// plain text, away from the buttons.
+/// The end of the command row with an info column on its right (counts,
+/// a state): plain text, away from the buttons.
 pub fn commandEndNote(b: *app.Buf, comptime fmt: []const u8, args: anytype) void {
-    b.raw("</div><span class=\"command-note\">");
+    b.raw("</div></div><div class=\"col col-info\">");
     b.add(fmt, args);
-    b.raw("</span></div></div>");
+    b.raw("</div></div>");
 }
 
 pub fn contentStart(b: *app.Buf) void {

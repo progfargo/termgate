@@ -9,15 +9,15 @@ td .button-group-fixed {
     row-gap: 4px;
 }
 
-/* A note on the right of the command row (counts, a state): plain text,
-   away from the buttons */
-.row-command > .col:has(> .command-note) {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--u3, 8px);
+/* The info column on the right of the command row (counts, a state):
+   plain text beside the buttons' column, with less room under the row */
+.row-command:has(> .col-info) > .col {
+    flex: 1 1 0;
+    padding-bottom: 0;
 }
-.command-note {
-    margin-left: auto;
+.row-command > .col-info {
+    flex: 0 0 auto;
+    text-align: right;
+    white-space: nowrap;
     color: var(--textColor);
 }

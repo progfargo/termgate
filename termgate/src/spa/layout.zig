@@ -11,7 +11,7 @@ const left_menu = @import("content/left_menu.zig");
 const top_menu = @import("content/top_menu.zig");
 
 const default_layout =
-    \\<div class="left-menu" id="left-menu-div"><div id="left-menu-nav"></div><div class="user-info" id="user-info"></div><div class="logo"><img src="/icon-192.png" alt="termgate logo"></div></div>
+    \\<div class="left-menu" id="left-menu-div"><div id="left-menu-nav"></div><div class="user-info" id="user-info"></div><div class="logo"><img src="/logo.svg" alt="termgate logo"></div></div>
     \\<header>
     \\<div class="top-menu-button" id="top-menu-btn" data-action="toggleMobileMenu"><i class="fa fa-bars"></i></div>
     \\<div class="left-menu-button" id="left-menu-btn" data-action="toggleSidebar"><i class="fa fa-bars"></i></div>

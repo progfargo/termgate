@@ -39,6 +39,8 @@ const files = [_]struct { path: []const u8, name: []const u8, mime: []const u8 }
     .{ .path = "/manifest.webmanifest", .name = "manifest.webmanifest", .mime = "application/manifest+json" },
     .{ .path = "/icon-192.png", .name = "icon-192.png", .mime = "image/png" },
     .{ .path = "/icon-512.png", .name = "icon-512.png", .mime = "image/png" },
+    // The logo, also the favicon
+    .{ .path = "/logo.svg", .name = "logo.svg", .mime = "image/svg+xml" },
 };
 
 pub const Listener = struct {

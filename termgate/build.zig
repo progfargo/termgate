@@ -171,8 +171,9 @@ pub fn build(b: *std.Build) void {
         spa_step.dependOn(&b.addInstallArtifact(spa, .{ .dest_dir = .{ .override = spa_dir } }).step);
         inline for (.{ "index.html", "boot.js", "zigjs.js", "test.js", "termgate.css" }) |f|
             spa_step.dependOn(&b.addInstallFileWithDir(b.path("web/spa/" ++ f), spa_dir, f).step);
-        // Installing the panel as an app (PWA)
-        inline for (.{ "manifest.webmanifest", "icon-192.png", "icon-512.png" }) |f|
+        // Installing the panel as an app (PWA); the logo and favicon (Font
+        // Awesome's terminal icon)
+        inline for (.{ "manifest.webmanifest", "icon-192.png", "icon-512.png", "logo.svg" }) |f|
             spa_step.dependOn(&b.addInstallFileWithDir(b.path("web/" ++ f), .{ .custom = "web" }, f).step);
         spa_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("web/asset"), .install_dir = .{ .custom = "web" }, .install_subdir = "asset" }).step);
         // `zig build web-test`: the panel in headless Chrome against a

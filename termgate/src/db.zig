@@ -1310,6 +1310,16 @@ pub const Db = struct {
         try st.done();
     }
 
+    /// Marks every open session ended: termgate is starting, and no session
+    /// outlives it (the relay stops with termgate, and with it every
+    /// connection; an end reported meanwhile could not arrive).
+    pub fn sessionsEndAll(db: *Db, at: i64) Error!void {
+        var st = try Stmt.prepare(db, "update session set ended = ? where ended is null");
+        defer st.finalize();
+        try st.bindInt(1, at);
+        try st.done();
+    }
+
     /// The session's end-to-end keys (termgate reads the session for its log
     /// and for watching). Stored encrypted with the log key.
     pub fn sessionSetKeys(db: *Db, sid: []const u8, keys: core.e2e.Keys) LogError!void {
@@ -1343,6 +1353,15 @@ pub const Db = struct {
     }
 
     /// Sessions that have not ended, newest first.
+    /// One session by its id; null: none.
+    pub fn sessionGet(db: *Db, a: std.mem.Allocator, sid: []const u8) !?Session {
+        var st = try Stmt.prepare(db, session_select ++ " where sid = ?");
+        defer st.finalize();
+        try st.bindText(1, sid);
+        if (!try st.step()) return null;
+        return try sessionRow(&st, a);
+    }
+
     pub fn sessionsActive(db: *Db, a: std.mem.Allocator) ![]Session {
         return db.sessionQuery(a, session_select ++ " where ended is null order by started desc, sessionId desc", null);
     }
@@ -1711,6 +1730,9 @@ test "terminal access: access key, redemption, uses, the user's nodes and sessio
     try testing.expectEqual(@as(?i64, 0), s1.exit_status);
     try testing.expectEqualStrings("ali", s1.user);
     try testing.expectEqual(@as(usize, 2), (try db.sessionsActive(a)).len);
+    // termgate starting: none is open any more
+    try db.sessionsEndAll(t0 + 1000);
+    try testing.expectEqual(@as(usize, 0), (try db.sessionsActive(a)).len);
 }
 
 test "terminal access: expiry, revocation, and the right to connect" {

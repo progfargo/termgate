@@ -235,7 +235,14 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
             t.stop();
             return error.OutOfMemory;
         };
-        return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .ok = id }, .{}) };
+        // Who the session is of, for the watching page
+        const user = blk: {
+            p.rpc.lock.lockUncancelable(p.io);
+            defer p.rpc.lock.unlock(p.io);
+            const ses = p.rpc.db.sessionGet(a, str(args, 2).?) catch null;
+            break :blk if (ses) |x| x.user else "";
+        };
+        return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .ok = .{ .tap = id, .user = user } }, .{}) };
     }
     const id = int(args, 0) orelse return err(.bad_request, "bad arguments");
     if (std.mem.eql(u8, what, "stop")) {

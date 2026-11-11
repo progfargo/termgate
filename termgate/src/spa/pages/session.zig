@@ -68,7 +68,6 @@ fn cargo() *CargoList {
         cg.addStr("sid", "");
         cg.addStr("node", "");
         cg.addStr("userKey", "");
-        cg.addStr("user", "");
         cg_ready = true;
     }
     return &cg;
@@ -82,8 +81,7 @@ fn sessionUrl(path: []const u8, s: Session, watch: bool) []const u8 {
     if (!watch) return c.makeUrl(path, &.{"sid"});
     c.setStr("node", s.node);
     c.setStr("userKey", s.user_key);
-    c.setStr("user", s.user);
-    return c.makeUrl(path, &.{ "sid", "node", "userKey", "user" });
+    return c.makeUrl(path, &.{ "sid", "node", "userKey" });
 }
 
 /// The header's Search: the list with the word, from its first page.

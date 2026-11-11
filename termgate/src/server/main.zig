@@ -198,6 +198,8 @@ pub fn main(init: std.process.Init) !void {
     var db = dbm.Db.open(db_path) catch fail("cannot open {s}", .{db_path});
     defer db.close();
     db.setLogKey(io, setup.logKey(io, o.home) catch |e| fail("cannot read the session log key: {s}", .{@errorName(e)}));
+    // Sessions still open in the database ended with the last run
+    db.sessionsEndAll(now(io)) catch |e| log.warn("cannot close the sessions of the last run: {s}", .{@errorName(e)});
     var db_lock: Io.Mutex = .init;
     var recorder: Recorder = .init(gpa, io, &db, &db_lock);
     defer recorder.deinit();

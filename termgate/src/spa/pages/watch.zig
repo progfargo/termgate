@@ -39,7 +39,6 @@ fn cargo() *CargoList {
         cg.addStr("sid", "");
         cg.addStr("node", "");
         cg.addStr("userKey", "");
-        cg.addStr("user", "");
         cg_ready = true;
     }
     return &cg;
@@ -55,7 +54,6 @@ pub fn render(query: []const u8) void {
     const sid = c.str("sid");
     const node = c.str("node");
     const key = c.str("userKey");
-    const user = c.str("user");
     var b: app.Buf = .{};
     content.header(&b, &.{ .{ "Sessions", "#/session" }, .{ std.fmt.allocPrint(app.arena(), "Watch: {s}", .{node}) catch "Watch", "" } });
     content.commandStart(&b);
@@ -63,13 +61,16 @@ pub fn render(query: []const u8) void {
     if (state.can("session", "end")) b.add("<button type=\"button\" data-action=\"sessionEnd\" id=\"watch-end\" data-sid=\"{s}\" data-node=\"{f}\" data-key=\"{f}\" class=\"button button-error button-sm\" title=\"Ends the user's session on the node; leaving this page only stops watching.\">End session</button>", .{ sid, app.esc(node), app.esc(key) });
     content.commandEnd(&b);
     // Who is connected where, and the state of watching
-    b.add("<div class=\"row row-content\"><div class=\"col\"><p>{f} on {f} <span id=\"watch-state\"><span class=\"label label-default\">connecting</span></span></p>", .{ app.esc(if (user.len > 0) user else "a user"), app.esc(node) });
+    b.add("<div class=\"row row-content\"><div class=\"col\"><p><strong>User name:</strong> <span id=\"watch-user\"></span> &nbsp; <strong>Node name:</strong> {f} &nbsp; <span id=\"watch-state\"><span class=\"label label-default\">connecting</span></span></p>", .{app.esc(node)});
     b.raw("<div class=\"terminal\" id=\"watch-screen\"></div></div></div>");
     content.show(&b);
 
     const answer = fetch.post("session/watch_start", .{ node, key, sid }) orelse return;
     if (fetch.refused()) return;
-    const tap = fetch.fieldAs(u64, answer, "data") orelse return;
+    const started = fetch.fieldAs(struct { tap: u64, user: []const u8 = "" }, answer, "data") orelse return;
+    const tap = started.tap;
+    // Whose session it is, as termgate recorded it
+    dom.setHtml("watch-user", std.fmt.allocPrint(app.arena(), "{f}", .{app.esc(started.user)}) catch "");
     // The terminal needs no system (no files, no clock): an Io that does
     // nothing (a WASM page has none)
     const screen = vt.Screen.create(app.gpa, std.Io.failing, 80, 24) catch return;

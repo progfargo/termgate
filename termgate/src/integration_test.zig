@@ -140,7 +140,7 @@ fn addSession(f: *Fixture, comptime tag: []const u8, node: []const u8, user: []c
     const th = dbm.tokenHash("tok-" ++ tag);
     const uid = try terminalUser(&f.db, "u-" ++ tag);
     try f.db.userSetNodes(uid, "*");
-    try f.db.terminalNewAccessKey(uid, .{ .max_uses = 5 }, &th, now() + 60, now());
+    try f.db.terminalNewAccessKey(uid, .{ .max_uses = 5 }, &th, now());
     try f.db.terminalUseAccessKey(uid, user);
     _ = try f.db.terminalUse(user, node, sid, started);
     try f.db.sessionSetKeys(sid, keys);
@@ -393,7 +393,7 @@ test "registration, status, access key, approvals with max_uses, audit" {
         defer f.lock.unlock(testing.io);
         const uid = try terminalUser(&f.db, "ali");
         try f.db.userSetNodes(uid, "box*");
-        try f.db.terminalNewAccessKey(uid, .{ .max_uses = 1 }, &inv_th, now() + 3600, now());
+        try f.db.terminalNewAccessKey(uid, .{ .max_uses = 1 }, &inv_th, now());
     }
     const ali = try KeyPair.fromRawSeed(.user, @splat(0x74));
     const ali_pub = ali.publicKey().encode();
@@ -504,7 +504,7 @@ test "strangers get only the CA; revoked access closes the connection" {
         defer f.lock.unlock(testing.io);
         const id = try terminalUser(&f.db, "bob");
         try f.db.userSetNodes(id, "*");
-        try f.db.terminalNewAccessKey(id, .{ .max_uses = 1 }, &th, now() + 60, now());
+        try f.db.terminalNewAccessKey(id, .{ .max_uses = 1 }, &th, now());
         try f.db.terminalUseAccessKey(id, &bob.publicKey().encode());
     }
     const ok = try f.connect(bob, null, &inbox);

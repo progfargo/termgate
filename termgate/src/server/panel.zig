@@ -253,8 +253,6 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
 
 /// A node key lasts this long unless used
 const node_key_lifetime_s = 3600;
-/// An access key lasts this long unless used
-const access_key_lifetime_s = 7 * 86400;
 
 /// nodes.create {name, description}, nodes.newKey {id}, terminal.accessKey
 /// {id (the user), uses, days}: a node key or
@@ -301,7 +299,7 @@ fn keyCall(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8, 
     db.terminalNewAccessKey(req.id, .{
         .max_uses = req.uses,
         .expires = if (req.days) |d| now + @as(i64, d) * 86400 else null,
-    }, &th, now + access_key_lifetime_s, now) catch |e| return answer.dbErr(a, e);
+    }, &th, now) catch |e| return answer.dbErr(a, e);
     return answer.ok(a, req.id, text);
 }
 

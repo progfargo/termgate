@@ -35,8 +35,6 @@ pub const Terminal = struct {
     expires: ?i64,
     revoked: bool,
     created: i64,
-    /// Until when the access key may be used (unused access keys)
-    access_key_expires: ?i64,
     /// Sessions opened so far
     uses: i64,
 };

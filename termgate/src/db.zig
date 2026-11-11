@@ -185,7 +185,6 @@ pub const Db = struct {
             \\    userId INTEGER PRIMARY KEY REFERENCES user(userId) ON DELETE CASCADE,
             \\    userKey TEXT UNIQUE,
             \\    accessKeyHash TEXT UNIQUE,
-            \\    accessKeyExpires INTEGER,
             \\    maxUses INTEGER,
             \\    expires INTEGER,
             \\    uses INTEGER NOT NULL DEFAULT 0,
@@ -1130,21 +1129,20 @@ pub const Db = struct {
     /// An admin gives `user_id` terminal access: a new access key with
     /// this token hash, usable until `token_expires`, with its limits. The
     /// access the user had before (its key, its sessions count) ends.
-    pub fn terminalNewAccessKey(db: *Db, user_id: i64, spec: TerminalSpec, key_hash: []const u8, key_expires: i64, now: i64) TerminalError!void {
+    pub fn terminalNewAccessKey(db: *Db, user_id: i64, spec: TerminalSpec, key_hash: []const u8, now: i64) TerminalError!void {
         if (spec.max_uses == null and spec.expires == null) return error.InvalidSpec;
         if (spec.max_uses) |m| if (m == 0) return error.InvalidSpec;
         if (!try db.hasId("select 1 from user where userId = ?", user_id)) return error.NotFound;
         var st = try Stmt.prepare(db,
-            \\insert or replace into terminal(userId, userKey, accessKeyHash, accessKeyExpires, maxUses, expires, uses, revoked, created)
-            \\values(?, null, ?, ?, ?, ?, 0, 0, ?)
+            \\insert or replace into terminal(userId, userKey, accessKeyHash, maxUses, expires, uses, revoked, created)
+            \\values(?, null, ?, ?, ?, 0, 0, ?)
         );
         defer st.finalize();
         try st.bindInt(1, user_id);
         try st.bindText(2, key_hash);
-        try st.bindInt(3, key_expires);
-        try st.bindOptInt(4, if (spec.max_uses) |m| m else null);
-        try st.bindOptInt(5, spec.expires);
-        try st.bindInt(6, now);
+        try st.bindOptInt(3, if (spec.max_uses) |m| m else null);
+        try st.bindOptInt(4, spec.expires);
+        try st.bindInt(5, now);
         st.done() catch |e| return db.mapUnique(e);
     }
 
@@ -1158,7 +1156,7 @@ pub const Db = struct {
     /// The access whose unused, unexpired access key has this token id
     /// (subject access.<id>).
     pub fn terminalByAccessKeyId(db: *Db, a: std.mem.Allocator, key_id: []const u8, now: i64) !?Terminal {
-        var st = try Stmt.prepare(db, terminal_select ++ " where substr(t.accessKeyHash, 1, 16) = ? and t.accessKeyExpires > ? and t.userKey is null and " ++ may_connect);
+        var st = try Stmt.prepare(db, terminal_select ++ " where substr(t.accessKeyHash, 1, 16) = ? and (t.expires is null or t.expires > ?) and t.userKey is null and " ++ may_connect);
         defer st.finalize();
         try st.bindText(1, key_id);
         try st.bindInt(2, now);
@@ -1168,7 +1166,7 @@ pub const Db = struct {
 
     /// The access whose unused, unexpired access key has this token hash.
     pub fn terminalByAccessKey(db: *Db, a: std.mem.Allocator, key_hash: []const u8, now: i64) !?Terminal {
-        var st = try Stmt.prepare(db, terminal_select ++ " where t.accessKeyHash = ? and t.accessKeyExpires > ? and t.userKey is null and " ++ may_connect);
+        var st = try Stmt.prepare(db, terminal_select ++ " where t.accessKeyHash = ? and (t.expires is null or t.expires > ?) and t.userKey is null and " ++ may_connect);
         defer st.finalize();
         try st.bindText(1, key_hash);
         try st.bindInt(2, now);
@@ -1207,7 +1205,7 @@ pub const Db = struct {
 
     /// The access key is used: bind the key and use up the token.
     pub fn terminalUseAccessKey(db: *Db, user_id: i64, user_key: []const u8) TerminalError!void {
-        var st = try Stmt.prepare(db, "update terminal set userKey = ?, accessKeyHash = null, accessKeyExpires = null where userId = ? and userKey is null");
+        var st = try Stmt.prepare(db, "update terminal set userKey = ?, accessKeyHash = null where userId = ? and userKey is null");
         defer st.finalize();
         try st.bindText(1, user_key);
         try st.bindInt(2, user_id);
@@ -1410,7 +1408,7 @@ pub const Db = struct {
     }
 
     const session_select = "select sid, node, userKey, userName, started, ended, exitStatus from session";
-    const terminal_select = "select t.userId, u.name, t.userKey, u.nodes, t.maxUses, t.expires, t.revoked, t.created, t.accessKeyExpires, t.uses " ++
+    const terminal_select = "select t.userId, u.name, t.userKey, u.nodes, t.maxUses, t.expires, t.revoked, t.created, t.uses " ++
         "from terminal t join user u on u.userId = t.userId";
 
     const node_select = "select nodeId, name, description, state, hardwareKey, requestKey, status, created, lastSeen, nodeKeyExpires, online from node";
@@ -1504,8 +1502,7 @@ const Stmt = struct {
             .expires = st.optInt(5),
             .revoked = st.int(6) != 0,
             .created = st.int(7),
-            .access_key_expires = st.optInt(8),
-            .uses = st.int(9),
+            .uses = st.int(8),
         };
     }
 
@@ -1666,7 +1663,7 @@ test "terminal access: access key, redemption, uses, the user's nodes and sessio
     const th = tokenHash("INV");
     const id = try testTerminalUser(&db, "ali");
     try db.userSetNodes(id, "ist_*,pump??");
-    try db.terminalNewAccessKey(id, .{ .max_uses = 2 }, &th, t0 + 3600, t0);
+    try db.terminalNewAccessKey(id, .{ .max_uses = 2 }, &th, t0);
     const p = (try db.terminalByAccessKey(a, &th, t0)).?;
     try testing.expectEqualStrings("ali", p.name);
     try testing.expectEqualStrings("ist_*,pump??", p.nodes);
@@ -1691,7 +1688,7 @@ test "terminal access: access key, redemption, uses, the user's nodes and sessio
     try testing.expectEqualStrings("unknown key", (try db.terminalUse("UMALLORY", "ist_gw1", "S4", t0)).denied);
     // The user's nodes change: they apply at once
     try db.userSetNodes(id, "");
-    try db.terminalNewAccessKey(id, .{ .max_uses = 5 }, &tokenHash("INV1B"), t0 + 3600, t0);
+    try db.terminalNewAccessKey(id, .{ .max_uses = 5 }, &tokenHash("INV1B"), t0);
     try db.terminalUseAccessKey(id, "UALI2");
     try testing.expectEqualStrings("this node is not among the user's nodes", (try db.terminalUse("UALI2", "ist_gw1", "S5", t0)).denied);
     try db.userSetNodes(id, "*");
@@ -1723,9 +1720,10 @@ test "terminal access: expiry, revocation, and the right to connect" {
     const th = tokenHash("INV2");
     const id = try testTerminalUser(&db, "bot1");
     try db.userSetNodes(id, "*");
-    try db.terminalNewAccessKey(id, .{ .expires = t0 + 60 }, &th, t0 + 10, t0);
-    // An access key that is not used in time expires
-    try testing.expect((try db.terminalByAccessKey(a, &th, t0 + 10)) == null);
+    try db.terminalNewAccessKey(id, .{ .expires = t0 + 60 }, &th, t0);
+    // An access key is used within the access's own time; after it, not
+    try testing.expect((try db.terminalByAccessKey(a, &th, t0 + 10)) != null);
+    try testing.expect((try db.terminalByAccessKey(a, &th, t0 + 60)) == null);
     try db.terminalUseAccessKey(id, "UBOT");
     try testing.expectEqual(Db.UseResult.allowed, try db.terminalUse("UBOT", "gw1", "B1", t0 + 59));
     try testing.expectEqualStrings("access expired", (try db.terminalUse("UBOT", "gw1", "B2", t0 + 60)).denied);
@@ -1745,7 +1743,7 @@ test "terminal access: expiry, revocation, and the right to connect" {
     try testing.expect((try db.terminalByKey(a, "UBOT")) == null);
     try testing.expectEqualStrings("access revoked", (try db.terminalUse("UBOT", "gw1", "B3", t0)).denied);
     // A new access key gives access again, with a new key
-    try db.terminalNewAccessKey(id, .{ .max_uses = 1 }, &tokenHash("INV3"), t0 + 10, t0);
+    try db.terminalNewAccessKey(id, .{ .max_uses = 1 }, &tokenHash("INV3"), t0);
     try testing.expect((try db.terminalByAccessKey(a, &tokenHash("INV3"), t0)) != null);
 }
 
@@ -1754,9 +1752,9 @@ test "an access key needs a limit" {
     defer db.close();
     const th = tokenHash("X");
     const id = try testTerminalUser(&db, "xx");
-    try testing.expectError(error.InvalidSpec, db.terminalNewAccessKey(id, .{}, &th, t0 + 1, t0));
-    try testing.expectError(error.InvalidSpec, db.terminalNewAccessKey(id, .{ .max_uses = 0 }, &th, t0 + 1, t0));
-    try testing.expectError(error.NotFound, db.terminalNewAccessKey(999, .{ .max_uses = 1 }, &th, t0 + 1, t0));
+    try testing.expectError(error.InvalidSpec, db.terminalNewAccessKey(id, .{}, &th, t0));
+    try testing.expectError(error.InvalidSpec, db.terminalNewAccessKey(id, .{ .max_uses = 0 }, &th, t0));
+    try testing.expectError(error.NotFound, db.terminalNewAccessKey(999, .{ .max_uses = 1 }, &th, t0));
 }
 
 test "settings and session logs" {

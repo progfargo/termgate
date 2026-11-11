@@ -28,7 +28,6 @@ const Terminal = struct {
     expires: ?i64 = null,
     revoked: bool = false,
     created: i64 = 0,
-    access_key_expires: ?i64 = null,
     uses: i64 = 0,
 };
 const User = struct { id: i64, name: []const u8, superuser: bool = false, disabled: bool = false, second_step: bool = false, created: i64 = 0, nodes: []const u8 = "", roles: []const RoleRef = &.{}, terminal: ?Terminal = null };
@@ -513,7 +512,7 @@ fn terminalLabel(b: *app.Buf, t: ?Terminal) void {
     const x = t orelse return b.raw("-");
     if (x.revoked) return content.label(b, "error", "revoked");
     if (x.user_key != null) return content.label(b, "success", "active");
-    if (x.access_key_expires) |e| if (e <= app.now()) return content.label(b, "warning", "key expired");
+    if (x.expires) |e| if (e <= app.now()) return content.label(b, "warning", "key expired");
     content.label(b, "primary", "key not used yet");
 }
 
@@ -590,7 +589,7 @@ pub fn submitAccessKey(f: Form) void {
     var b: app.Buf = .{};
     recordHeader(&b, u, .terminal, "Access Key");
     content.contentStart(&b);
-    b.add("<p>Shown once. Hand it to <strong>{f}</strong>: it runs this once, within 7 days, on its own machine; tgterm makes its key there. After that \"tgterm &lt;node&gt;\" is enough.</p>", .{app.esc(u.name)});
+    b.add("<p>Shown once. Hand it to <strong>{f}</strong>: it runs this once on its own machine; tgterm makes its key there. After that \"tgterm &lt;node&gt;\" is enough.</p>", .{app.esc(u.name)});
     b.add("<pre class=\"wrap\">{f}</pre>", .{app.esc(command)});
     content.contentEnd(&b);
     content.commandStart(&b);

@@ -1,4 +1,5 @@
-//! tgnode's configuration file (JSON, default /etc/tgnode/node.json).
+//! tgnode's configuration file: node.json (JSON) in the folder tgnode is
+//! started in, as termgate keeps its data in the folder it is started in.
 //!
 //! Written by tgnode when its registration is approved. Holds only public
 //! material: the node's name, the relay address, termgate's CA and termgate's
@@ -10,7 +11,7 @@ const Io = std.Io;
 const core = @import("core");
 const node_name = core.node;
 
-pub const default_path = "/etc/tgnode/node.json";
+pub const file_name = "node.json";
 
 pub const Config = struct {
     /// Node name given by the admin (see core.node)

@@ -5,10 +5,12 @@
 //! Usage:
 //!   tgnode id                 print this node's public key (from the hardware)
 //!   tgnode status             print the system info sent to termgate
-//!   tgnode run [config.json]  serve sessions (default /etc/tgnode/node.json)
-//!   tgnode --registration <node key> [config.json]
+//!   tgnode run                serve sessions
+//!   tgnode --registration <node key>
 //!                             first run: register with termgate, store the
 //!                             config once the admin approves, then serve
+//!
+//! The config is node.json in the folder tgnode is started in.
 
 const std = @import("std");
 const core = @import("core");
@@ -25,9 +27,11 @@ const usage =
     \\commands:
     \\  id                 print this node's public key
     \\  status             print the system info sent to termgate
-    \\  run [config.json]  serve sessions (default /etc/tgnode/node.json)
-    \\  --registration <node key> [config.json]
+    \\  run                serve sessions
+    \\  --registration <node key>
     \\                     first run: register with termgate, then serve
+    \\
+    \\The config is node.json in the folder tgnode is started in.
     \\
 ;
 
@@ -55,8 +59,8 @@ pub fn main(init: std.process.Init) !void {
         try out.flush();
         return;
     }
-    if (args.len >= 2 and args.len <= 3 and std.mem.eql(u8, args[1], "run")) {
-        const path = if (args.len == 3) args[2] else config.default_path;
+    if (args.len == 2 and std.mem.eql(u8, args[1], "run")) {
+        const path = config.file_name;
         const cfg = try config.load(init.gpa, io, path);
         defer cfg.deinit();
         var root = try std.Io.Dir.openDirAbsolute(io, "/", .{});
@@ -64,8 +68,8 @@ pub fn main(init: std.process.Init) !void {
         const key = try hwkey.keyPair(init.gpa, io, root);
         return agent.serveForever(init.gpa, io, cfg.value, key, root);
     }
-    if (args.len >= 3 and args.len <= 4 and std.mem.eql(u8, args[1], "--registration")) {
-        const path = if (args.len == 4) args[3] else config.default_path;
+    if (args.len == 3 and std.mem.eql(u8, args[1], "--registration")) {
+        const path = config.file_name;
         var root = try std.Io.Dir.openDirAbsolute(io, "/", .{});
         defer root.close(io);
         const key = try hwkey.keyPair(init.gpa, io, root);

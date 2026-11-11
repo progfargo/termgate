@@ -141,3 +141,7 @@ termgate is the rewrite of [farlogin](https://github.com/progfargo/farlogin), a 
 ---
 
 Built with [Claude Code](https://claude.com/claude-code). I defined the features and requirements, chose the tools (Zig, NATS, libghostty-vt, SQLite), reviewed the results and tested the app; Claude wrote most of the code.
+
+## License
+
+MIT (see `LICENSE`). Bundled: Font Awesome Free (`termgate/web/asset/fontawesome/LICENSE.txt`), the Ubuntu font (Ubuntu Font Licence), zig-js (`termgate/vendor/zig-js/LICENSE`) and nayuki's QR Code generator (MIT, in its source).

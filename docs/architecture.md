@@ -174,7 +174,7 @@ Permissions termgate gives each connection (in its callout answer):
 
 | Identity | Publish | Subscribe |
 |---|---|---|
-| tgnode `<node>` | `status.<node>`, `authorize.<node>`, `audit.<node>`, `out.<node>.>`; replies to requests | `session.open.<node>`, `status.req.<node>`, `status.req.all`, `in.<node>.>`, `_INBOX.<node>.>` |
+| tgnode `<node>` | `status.<node>`, `authorize.<node>`, `audit.<node>`, `out.<node>.>`, `ca.get`; replies to requests | `session.open.<node>`, `status.req.<node>`, `status.req.all`, `in.<node>.>`, `_INBOX.<node>.>`, `_INBOX.<key>.>` |
 | tgnode while registering | `register.<token id>` | `_INBOX.<key>.>` |
 | anyone else with a valid key signature | `ca.get` | `_INBOX.<key>.>` |
 | user `<user>` | `session.open.*`, `in.*.<user>.>` | `out.*.<user>.>`, `_INBOX.<user>.>` |

@@ -268,7 +268,7 @@ pub const Service = struct {
         // connections to mark online or to close: node:<name> (unique) and
         // user:<key>; only users who may connect (terminal:connect)
         if (try s.db.nodeByHardwareKey(a, k)) |n|
-            return .{ .allow = .{ .name = try std.fmt.allocPrint(a, "{s}{s}", .{ node_prefix, n.name }), .account = account, .permissions = try core.perms.node(a, n.name) } };
+            return .{ .allow = .{ .name = try std.fmt.allocPrint(a, "{s}{s}", .{ node_prefix, n.name }), .account = account, .permissions = try core.perms.node(a, n.name, k) } };
         if (try s.db.terminalByKey(a, k)) |_|
             return .{ .allow = .{ .name = try std.fmt.allocPrint(a, "{s}{s}", .{ user_prefix, k }), .account = account, .permissions = try core.perms.user(a, k) } };
         return .{ .allow = .{ .name = "anonymous", .account = account, .permissions = try core.perms.anonymous(a, k) } };

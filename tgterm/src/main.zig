@@ -35,8 +35,13 @@ pub fn main(init: std.process.Init) !void {
             else => @errorName(e),
         }});
         try profile.save(gpa, io, path, p);
-        std.debug.print("tgterm: access key accepted; profile stored in {s}\n", .{path});
         if (args.len == 4) std.process.exit(try client.run(gpa, io, p, args[3]));
+        std.debug.print(
+            \\tgterm is set up.
+            \\To connect to a node, run:
+            \\  tgterm <node name>
+            \\
+        , .{});
         return;
     }
 

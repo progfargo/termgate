@@ -155,7 +155,7 @@ pub const Termgate = struct {
             if (std.mem.eql(u8, k, &t.key_pub))
                 break :blk .{ .allow = .{ .name = "termgate", .account = "APP", .permissions = core.perms.termgate() } };
             if (t.nodeName(k)) |name|
-                break :blk .{ .allow = .{ .name = try std.fmt.allocPrint(a, "node:{s}", .{name}), .account = "APP", .permissions = try core.perms.node(a, name) } };
+                break :blk .{ .allow = .{ .name = try std.fmt.allocPrint(a, "node:{s}", .{name}), .account = "APP", .permissions = try core.perms.node(a, name, k) } };
             if (t.isUser(k))
                 break :blk .{ .allow = .{ .name = k, .account = "APP", .permissions = try core.perms.user(a, k) } };
             if (r.connect_opts.auth_token) |tok| {

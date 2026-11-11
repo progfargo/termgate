@@ -593,7 +593,6 @@ pub fn submitAccessKey(f: Form) void {
     content.contentEnd(&b);
     content.commandStart(&b);
     b.add("<button type=\"button\" data-action=\"copy\" data-text=\"{f}\" class=\"button button-default button-sm\"><i class=\"fa fa-copy\"></i> Copy</button>", .{app.esc(command)});
-    b.add("<a href=\"{s}\" class=\"button button-default button-sm\">Done</a>", .{userUrl("#/user/terminal", edit_id)});
     content.commandEnd(&b);
     content.show(&b);
 }

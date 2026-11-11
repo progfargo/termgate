@@ -132,16 +132,17 @@ fn terminalUser(db: *dbm.Db, name: []const u8) !i64 {
 }
 
 /// An open session in termgate's database with known end-to-end keys, as if
-/// termgate had approved it. `tag` makes the user and grant unique.
+/// termgate had approved it. `tag` makes the user unique.
 fn addSession(f: *Fixture, comptime tag: []const u8, node: []const u8, user: []const u8, sid: []const u8, started: i64) !core.e2e.Keys {
     const keys: core.e2e.Keys = .{ .up = @splat(0x41), .down = @splat(0x42) };
     f.lock.lockUncancelable(testing.io);
     defer f.lock.unlock(testing.io);
     const th = dbm.tokenHash("tok-" ++ tag);
     const uid = try terminalUser(&f.db, "u-" ++ tag);
-    try f.db.terminalInvite(uid, .{ .nodes = "*", .max_uses = 5 }, &th, now() + 60, now());
-    try f.db.terminalRedeem(uid, user, "JTI-" ++ tag, "<grant>", 5, null);
-    _ = try f.db.grantUse("JTI-" ++ tag, node, sid, user, started);
+    try f.db.userSetNodes(uid, "*");
+    try f.db.terminalInvite(uid, .{ .max_uses = 5 }, &th, now() + 60, now());
+    try f.db.terminalRedeem(uid, user);
+    _ = try f.db.terminalUse(user, node, sid, started);
     try f.db.sessionSetKeys(sid, keys);
     return keys;
 }
@@ -390,20 +391,22 @@ test "registration, status, invitation, approvals with max_uses, audit" {
     {
         f.lock.lockUncancelable(testing.io);
         defer f.lock.unlock(testing.io);
-        try f.db.terminalInvite(try terminalUser(&f.db, "ali"), .{ .nodes = "box*", .max_uses = 1 }, &inv_th, now() + 3600, now());
+        const uid = try terminalUser(&f.db, "ali");
+        try f.db.userSetNodes(uid, "box*");
+        try f.db.terminalInvite(uid, .{ .max_uses = 1 }, &inv_th, now() + 3600, now());
     }
     const ali = try KeyPair.fromRawSeed(.user, @splat(0x74));
     const ali_pub = ali.publicKey().encode();
-    const grant_tok = blk: {
+    const issuer_text = blk: {
         const c = try f.connect(ali, inv.token, &inbox);
         defer c.close();
         const subject = try std.fmt.allocPrint(ar, "invite.{s}", .{&core.code.tokenId(inv.token)});
         const body = try std.fmt.allocPrint(ar, "{{\"user_key\":\"{s}\"}}", .{&ali_pub});
         const r = try c.request(subject, body, Conn.seconds(5));
         defer r.deinit(a);
-        const Ans = struct { grant: []const u8 };
+        const Ans = struct { issuer: []const u8 };
         const ans = try std.json.parseFromSliceLeaky(Ans, ar, r.payload, .{ .allocate = .alloc_always });
-        break :blk ans.grant;
+        break :blk ans.issuer;
     };
     // Ali's key alone now connects (user permissions); the invitation is used up
     {
@@ -414,16 +417,17 @@ test "registration, status, invitation, approvals with max_uses, audit" {
 
     // --- box1 asks for approval of Ali's sessions: once allowed, then refused
     const issuer_pub = (try KeyPair.fromRawSeed(.account, @splat(0x1f))).publicKey().encode();
-    const g = try core.grant.verify(ar, grant_tok, .{ .issuers = &.{&issuer_pub}, .node = "box1", .user = &ali_pub, .now = now() });
+    // The invitation answered only termgate's issuer key
+    try testing.expectEqualStrings(&issuer_pub, issuer_text);
     // Each request carries both session public keys and the session keys
     // sealed to termgate
     const issuer_key = try core.nkeys.PublicKey.decode(&issuer_pub);
     const sk: core.e2e.Keys = .{ .up = @splat(0x51), .down = @splat(0x52) };
     const box1 = try core.e2e.sealForTermgate(ar, testing.io, issuer_key, sk, "SID1", "KXU", "KXN");
-    const req1: core.approval.Request = .{ .grant = grant_tok, .node = "box1", .nonce = "n1", .sid = "SID1", .kx_user = "KXU", .kx_node = "KXN", .keys = box1 };
+    const req1: core.approval.Request = .{ .user = &ali_pub, .node = "box1", .nonce = "n1", .sid = "SID1", .kx_user = "KXU", .kx_node = "KXN", .keys = box1 };
     const ans1 = try node.request("authorize.box1", try std.json.Stringify.valueAlloc(ar, req1, .{}), Conn.seconds(5));
     defer ans1.deinit(a);
-    try core.approval.verify(ar, ans1.payload, .{ .issuers = &.{&issuer_pub}, .request = req1, .user = &ali_pub, .grant_jti = g.value.jti.?, .now = now() });
+    try core.approval.verify(ar, ans1.payload, .{ .issuers = &.{&issuer_pub}, .request = req1, .now = now() });
 
     // termgate kept the session's keys
     {
@@ -433,10 +437,10 @@ test "registration, status, invitation, approvals with max_uses, audit" {
     }
 
     const box2 = try core.e2e.sealForTermgate(ar, testing.io, issuer_key, sk, "SID2", "KXU", "KXN");
-    const req2: core.approval.Request = .{ .grant = grant_tok, .node = "box1", .nonce = "n2", .sid = "SID2", .kx_user = "KXU", .kx_node = "KXN", .keys = box2 };
+    const req2: core.approval.Request = .{ .user = &ali_pub, .node = "box1", .nonce = "n2", .sid = "SID2", .kx_user = "KXU", .kx_node = "KXN", .keys = box2 };
     const ans2 = try node.request("authorize.box1", try std.json.Stringify.valueAlloc(ar, req2, .{}), Conn.seconds(5));
     defer ans2.deinit(a);
-    const e2: core.approval.Expect = .{ .issuers = &.{&issuer_pub}, .request = req2, .user = &ali_pub, .grant_jti = g.value.jti.?, .now = now() };
+    const e2: core.approval.Expect = .{ .issuers = &.{&issuer_pub}, .request = req2, .now = now() };
     try testing.expectError(error.Denied, core.approval.verify(ar, ans2.payload, e2));
     try testing.expectEqualStrings("no uses left", try core.approval.denialReason(ar, ans2.payload, e2));
 
@@ -499,8 +503,9 @@ test "strangers get only the CA; revoked access closes the connection" {
         f.lock.lockUncancelable(testing.io);
         defer f.lock.unlock(testing.io);
         const id = try terminalUser(&f.db, "bob");
-        try f.db.terminalInvite(id, .{ .nodes = "*", .max_uses = 1 }, &th, now() + 60, now());
-        try f.db.terminalRedeem(id, &bob.publicKey().encode(), "JTIBOB", "x", 1, null);
+        try f.db.userSetNodes(id, "*");
+        try f.db.terminalInvite(id, .{ .max_uses = 1 }, &th, now() + 60, now());
+        try f.db.terminalRedeem(id, &bob.publicKey().encode());
     }
     const ok = try f.connect(bob, null, &inbox);
     defer ok.close();

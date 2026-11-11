@@ -136,7 +136,8 @@ pub const Db = struct {
             \\    failCount INTEGER NOT NULL DEFAULT 0,
             \\    lockedUntil INTEGER NOT NULL DEFAULT 0,
             \\    disabled INTEGER NOT NULL DEFAULT 0,
-            \\    created INTEGER NOT NULL
+            \\    created INTEGER NOT NULL,
+            \\    nodes TEXT NOT NULL DEFAULT ''
             \\)
         );
         try db.exec(
@@ -176,8 +177,9 @@ pub const Db = struct {
         );
         try db.exec("CREATE INDEX IF NOT EXISTS userRoleRole ON userRole(roleId)");
         if (first_roles) try db.seedRoles();
-        // A user's terminal access: the grant spec chosen by an admin when
-        // giving it, and the user's key once the invitation is used
+        // A user's terminal access: its invitation (the token's hash until
+        // it is used), the key it bound, the invitation's limits and the
+        // sessions opened so far. Which nodes is the user's (user.nodes).
         try db.exec(
             \\CREATE TABLE IF NOT EXISTS terminal (
             \\    userId INTEGER PRIMARY KEY REFERENCES user(userId) ON DELETE CASCADE,
@@ -185,23 +187,11 @@ pub const Db = struct {
             \\    userKey TEXT UNIQUE,
             \\    tokenHash TEXT UNIQUE,
             \\    tokenExpires INTEGER,
-            \\    nodes TEXT NOT NULL,
             \\    maxUses INTEGER,
-            \\    grantExp INTEGER,
+            \\    expires INTEGER,
+            \\    uses INTEGER NOT NULL DEFAULT 0,
             \\    revoked INTEGER NOT NULL DEFAULT 0,
             \\    created INTEGER NOT NULL
-            \\)
-        );
-        // The grants termgate issued, with their uses
-        try db.exec(
-            \\CREATE TABLE IF NOT EXISTS grantRecord (
-            \\    jti TEXT PRIMARY KEY,
-            \\    userId INTEGER NOT NULL REFERENCES user(userId) ON DELETE CASCADE,
-            \\    token TEXT NOT NULL,
-            \\    maxUses INTEGER,
-            \\    uses INTEGER NOT NULL DEFAULT 0,
-            \\    exp INTEGER,
-            \\    revoked INTEGER NOT NULL DEFAULT 0
             \\)
         );
         // What panel users did: every changing call and every sign-in
@@ -236,7 +226,6 @@ pub const Db = struct {
             \\    node TEXT NOT NULL,
             \\    userKey TEXT NOT NULL,
             \\    userName TEXT NOT NULL,
-            \\    grantJti TEXT NOT NULL,
             \\    started INTEGER NOT NULL,
             \\    ended INTEGER,
             \\    exitStatus INTEGER,
@@ -313,7 +302,7 @@ pub const Db = struct {
         return c.sqlite3_last_insert_rowid(db.handle);
     }
 
-    const user_select = "select userId, name, isSuperuser, passwordHash, totpConfirmed, totpLastStep, failCount, lockedUntil, disabled, created from user";
+    const user_select = "select userId, name, isSuperuser, passwordHash, totpConfirmed, totpLastStep, failCount, lockedUntil, disabled, created, nodes from user";
 
     fn userRow(st: *Stmt, a: std.mem.Allocator) !User {
         return .{
@@ -327,7 +316,23 @@ pub const Db = struct {
             .locked_until = st.int(7),
             .disabled = st.int(8) != 0,
             .created = st.int(9),
+            .nodes = try st.text(a, 10),
         };
+    }
+
+    /// The nodes a user may reach with tgterm: name patterns, comma
+    /// separated ("ist_*,pump??"); empty: none.
+    pub fn userSetNodes(db: *Db, id: i64, nodes: []const u8) (error{InvalidSpec} || UserError)!void {
+        if (nodes.len > 0) {
+            var it = std.mem.splitScalar(u8, nodes, ',');
+            while (it.next()) |p| if (!core.node.isValidPattern(p)) return error.InvalidSpec;
+        }
+        var st = try Stmt.prepare(db, "update user set nodes = ? where userId = ?");
+        defer st.finalize();
+        try st.bindText(1, nodes);
+        try st.bindInt(2, id);
+        try st.done();
+        if (c.sqlite3_changes(db.handle) == 0) return error.NotFound;
     }
 
     pub fn userByName(db: *Db, a: std.mem.Allocator, name: []const u8) !?User {
@@ -1124,40 +1129,25 @@ pub const Db = struct {
     ;
 
     /// An admin gives `user_id` terminal access: a new invitation with
-    /// this token hash, usable until `token_expires`. Access the user had
-    /// before (its key, its grants) ends.
+    /// this token hash, usable until `token_expires`, with its limits. The
+    /// access the user had before (its key, its sessions count) ends.
     pub fn terminalInvite(db: *Db, user_id: i64, spec: TerminalSpec, token_hash: []const u8, token_expires: i64, now: i64) TerminalError!void {
-        if (spec.max_uses == null and spec.grant_exp == null) return error.InvalidSpec;
+        if (spec.max_uses == null and spec.expires == null) return error.InvalidSpec;
         if (spec.max_uses) |m| if (m == 0) return error.InvalidSpec;
-        var it = std.mem.splitScalar(u8, spec.nodes, ',');
-        while (it.next()) |p| if (!core.node.isValidPattern(p)) return error.InvalidSpec;
-
-        try db.begin();
-        errdefer db.rollback();
         if (!try db.hasId("select 1 from user where userId = ?", user_id)) return error.NotFound;
-        {
-            var st = try Stmt.prepare(db, "update grantRecord set revoked = 1 where userId = ?");
-            defer st.finalize();
-            try st.bindInt(1, user_id);
-            try st.done();
-        }
-        {
-            var st = try Stmt.prepare(db,
-                \\insert or replace into terminal(userId, kind, userKey, tokenHash, tokenExpires, nodes, maxUses, grantExp, revoked, created)
-                \\values(?, ?, null, ?, ?, ?, ?, ?, 0, ?)
-            );
-            defer st.finalize();
-            try st.bindInt(1, user_id);
-            try st.bindText(2, @tagName(spec.kind));
-            try st.bindText(3, token_hash);
-            try st.bindInt(4, token_expires);
-            try st.bindText(5, spec.nodes);
-            try st.bindOptInt(6, if (spec.max_uses) |m| m else null);
-            try st.bindOptInt(7, spec.grant_exp);
-            try st.bindInt(8, now);
-            st.done() catch |e| return db.mapUnique(e);
-        }
-        try db.commit();
+        var st = try Stmt.prepare(db,
+            \\insert or replace into terminal(userId, kind, userKey, tokenHash, tokenExpires, maxUses, expires, uses, revoked, created)
+            \\values(?, ?, null, ?, ?, ?, ?, 0, 0, ?)
+        );
+        defer st.finalize();
+        try st.bindInt(1, user_id);
+        try st.bindText(2, @tagName(spec.kind));
+        try st.bindText(3, token_hash);
+        try st.bindInt(4, token_expires);
+        try st.bindOptInt(5, if (spec.max_uses) |m| m else null);
+        try st.bindOptInt(6, spec.expires);
+        try st.bindInt(7, now);
+        st.done() catch |e| return db.mapUnique(e);
     }
 
     fn hasId(db: *Db, sql: [:0]const u8, id: i64) Error!bool {
@@ -1217,65 +1207,40 @@ pub const Db = struct {
         return list.toOwnedSlice(a);
     }
 
-    /// The invitation is used: bind the key, use up the token and store the
-    /// grant termgate issued for the key. One transaction.
-    pub fn terminalRedeem(db: *Db, user_id: i64, user_key: []const u8, jti: []const u8, grant_token: []const u8, max_uses: ?u32, exp: ?i64) TerminalError!void {
-        try db.begin();
-        errdefer db.rollback();
-        {
-            var st = try Stmt.prepare(db, "update terminal set userKey = ?, tokenHash = null, tokenExpires = null where userId = ? and userKey is null");
-            defer st.finalize();
-            try st.bindText(1, user_key);
-            try st.bindInt(2, user_id);
-            st.done() catch |e| return db.mapUnique(e);
-            if (c.sqlite3_changes(db.handle) == 0) return error.NotFound;
-        }
-        {
-            var st = try Stmt.prepare(db, "insert into grantRecord(jti, userId, token, maxUses, exp) values(?, ?, ?, ?, ?)");
-            defer st.finalize();
-            try st.bindText(1, jti);
-            try st.bindInt(2, user_id);
-            try st.bindText(3, grant_token);
-            try st.bindOptInt(4, if (max_uses) |m| m else null);
-            try st.bindOptInt(5, exp);
-            st.done() catch |e| return db.mapUnique(e);
-        }
-        try db.commit();
+    /// The invitation is used: bind the key and use up the token.
+    pub fn terminalRedeem(db: *Db, user_id: i64, user_key: []const u8) TerminalError!void {
+        var st = try Stmt.prepare(db, "update terminal set userKey = ?, tokenHash = null, tokenExpires = null where userId = ? and userKey is null");
+        defer st.finalize();
+        try st.bindText(1, user_key);
+        try st.bindInt(2, user_id);
+        st.done() catch |e| return db.mapUnique(e);
+        if (c.sqlite3_changes(db.handle) == 0) return error.NotFound;
     }
 
     /// Revoking ends a user's terminal access: its connections are refused
-    /// (callout) and its grants stop.
+    /// (callout) and no session opens any more.
     pub fn terminalRevoke(db: *Db, user_id: i64) TerminalError!void {
-        try db.begin();
-        errdefer db.rollback();
-        {
-            var st = try Stmt.prepare(db, "update terminal set revoked = 1 where userId = ?");
-            defer st.finalize();
-            try st.bindInt(1, user_id);
-            try st.done();
-            if (c.sqlite3_changes(db.handle) == 0) return error.NotFound;
-        }
-        {
-            var st = try Stmt.prepare(db, "update grantRecord set revoked = 1 where userId = ?");
-            defer st.finalize();
-            try st.bindInt(1, user_id);
-            try st.done();
-        }
-        try db.commit();
+        var st = try Stmt.prepare(db, "update terminal set revoked = 1 where userId = ?");
+        defer st.finalize();
+        try st.bindInt(1, user_id);
+        try st.done();
+        if (c.sqlite3_changes(db.handle) == 0) return error.NotFound;
     }
 
-    // --- grants and sessions ----------------------------------------------
+    // --- sessions ---------------------------------------------------------
 
     pub const UseResult = union(enum) {
         allowed,
         denied: []const u8,
     };
 
-    /// A node asks to open a session under a grant. Checks revocation, the
-    /// grant's owner, expiry and max_uses; on success counts the use and
-    /// records the session start. One transaction, so concurrent requests
-    /// cannot exceed max_uses.
-    pub fn grantUse(db: *Db, jti: []const u8, node: []const u8, sid: []const u8, user_key: []const u8, now: i64) Error!UseResult {
+    /// A node asks to open a session for the user with this key. Decided
+    /// here, from the database: the user may connect (not blocked, access
+    /// not revoked, terminal:connect from a role), the node matches one of
+    /// the user's node patterns, the invitation has not ended and has uses
+    /// left. On success counts the use and records the session start. One
+    /// transaction, so concurrent requests cannot exceed the uses.
+    pub fn terminalUse(db: *Db, user_key: []const u8, node: []const u8, sid: []const u8, now: i64) Error!UseResult {
         try db.begin();
         var committed = false;
         defer if (!committed) db.rollback();
@@ -1283,51 +1248,46 @@ pub const Db = struct {
         var name_buf: [128]u8 = undefined;
         var name: []const u8 = "";
         {
-            var st = try Stmt.prepare(db, "select g.maxUses, g.uses, g.exp, g.revoked, case when " ++ may_connect ++ " then 0 else 1 end, u.name, t.userKey " ++
-                "from grantRecord g join terminal t on t.userId = g.userId join user u on u.userId = g.userId where g.jti = ?");
+            var st = try Stmt.prepare(db, "select t.maxUses, t.uses, t.expires, case when " ++ may_connect ++ " then 0 else 1 end, u.name, u.nodes " ++
+                "from terminal t join user u on u.userId = t.userId where t.userKey = ?");
             defer st.finalize();
-            try st.bindText(1, jti);
-            if (!try st.step()) return .{ .denied = "unknown grant" };
+            try st.bindText(1, user_key);
+            if (!try st.step()) return .{ .denied = "unknown key" };
             const max_uses = st.optInt(0);
             const uses = st.int(1);
-            const exp = st.optInt(2);
-            const raw = st.rawText(5);
+            const expires = st.optInt(2);
+            const raw = st.rawText(4);
             name = name_buf[0..@min(raw.len, name_buf.len)];
             @memcpy(@constCast(name), raw[0..name.len]);
-            if (st.int(3) != 0 or st.int(4) != 0) return .{ .denied = "access revoked" };
-            if (!std.mem.eql(u8, st.rawText(6), user_key)) return .{ .denied = "grant belongs to someone else" };
-            if (exp) |e| if (now >= e) return .{ .denied = "access expired" };
+            if (st.int(3) != 0) return .{ .denied = "access revoked" };
+            if (expires) |e| if (now >= e) return .{ .denied = "access expired" };
             if (max_uses) |m| if (uses >= m) return .{ .denied = "no uses left" };
+            var allowed = false;
+            var it = std.mem.splitScalar(u8, st.rawText(5), ',');
+            while (it.next()) |pattern| {
+                if (pattern.len > 0 and core.node.globMatch(pattern, node)) allowed = true;
+            }
+            if (!allowed) return .{ .denied = "this node is not among the user's nodes" };
         }
         {
-            var up = try Stmt.prepare(db, "update grantRecord set uses = uses + 1 where jti = ?");
+            var up = try Stmt.prepare(db, "update terminal set uses = uses + 1 where userKey = ?");
             defer up.finalize();
-            try up.bindText(1, jti);
+            try up.bindText(1, user_key);
             try up.done();
         }
         {
-            var ins = try Stmt.prepare(db, "insert into session(sid, node, userKey, userName, grantJti, started) values(?, ?, ?, ?, ?, ?)");
+            var ins = try Stmt.prepare(db, "insert into session(sid, node, userKey, userName, started) values(?, ?, ?, ?, ?)");
             defer ins.finalize();
             try ins.bindText(1, sid);
             try ins.bindText(2, node);
             try ins.bindText(3, user_key);
             try ins.bindText(4, name);
-            try ins.bindText(5, jti);
-            try ins.bindInt(6, now);
+            try ins.bindInt(5, now);
             try ins.done();
         }
         try db.commit();
         committed = true;
         return .allowed;
-    }
-
-    /// Uses of a grant so far.
-    pub fn grantUses(db: *Db, jti: []const u8) Error!?i64 {
-        var st = try Stmt.prepare(db, "select uses from grantRecord where jti = ?");
-        defer st.finalize();
-        try st.bindText(1, jti);
-        if (!try st.step()) return null;
-        return st.int(0);
     }
 
     /// The node reported the end of a session (audit.<node>). Repeated reports
@@ -1414,10 +1374,9 @@ pub const Db = struct {
             .node = try st.text(a, 1),
             .user_key = try st.text(a, 2),
             .user = try st.text(a, 3),
-            .grant_jti = try st.text(a, 4),
-            .started = st.int(5),
-            .ended = st.optInt(6),
-            .exit_status = st.optInt(7),
+            .started = st.int(4),
+            .ended = st.optInt(5),
+            .exit_status = st.optInt(6),
         };
     }
 
@@ -1445,17 +1404,16 @@ pub const Db = struct {
             .node = try st.text(a, 1),
             .user_key = try st.text(a, 2),
             .user = try st.text(a, 3),
-            .grant_jti = try st.text(a, 4),
-            .started = st.int(5),
-            .ended = st.optInt(6),
-            .exit_status = st.optInt(7),
+            .started = st.int(4),
+            .ended = st.optInt(5),
+            .exit_status = st.optInt(6),
         });
         return list.toOwnedSlice(a);
     }
 
-    const session_select = "select sid, node, userKey, userName, grantJti, started, ended, exitStatus from session";
-    const terminal_select = "select t.userId, u.name, t.kind, t.userKey, t.nodes, t.maxUses, t.grantExp, t.revoked, t.created, t.tokenExpires, " ++
-        "(select uses from grantRecord g where g.userId = t.userId order by g.rowid desc limit 1) from terminal t join user u on u.userId = t.userId";
+    const session_select = "select sid, node, userKey, userName, started, ended, exitStatus from session";
+    const terminal_select = "select t.userId, u.name, t.kind, t.userKey, u.nodes, t.maxUses, t.expires, t.revoked, t.created, t.tokenExpires, t.uses " ++
+        "from terminal t join user u on u.userId = t.userId";
 
     const node_select = "select nodeId, name, description, state, hardwareKey, requestKey, status, created, lastSeen, tokenExpires, online from node";
 
@@ -1542,15 +1500,15 @@ const Stmt = struct {
         return .{
             .id = st.int(0),
             .name = try st.text(a, 1),
-            .kind = std.meta.stringToEnum(core.grant.Kind, st.rawText(2)) orelse return error.SqliteError,
+            .kind = std.meta.stringToEnum(types.TerminalKind, st.rawText(2)) orelse return error.SqliteError,
             .user_key = try st.optText(a, 3),
             .nodes = try st.text(a, 4),
             .max_uses = st.optInt(5),
-            .grant_exp = st.optInt(6),
+            .expires = st.optInt(6),
             .revoked = st.int(7) != 0,
             .created = st.int(8),
             .token_expires = st.optInt(9),
-            .uses = st.optInt(10),
+            .uses = st.int(10),
         };
     }
 
@@ -1701,7 +1659,7 @@ fn testTerminalUser(db: *Db, name: []const u8) !i64 {
     return id;
 }
 
-test "terminal access: invitation, redemption, grant uses and sessions" {
+test "terminal access: invitation, redemption, uses, the user's nodes and sessions" {
     var db = try testDb();
     defer db.close();
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -1710,41 +1668,52 @@ test "terminal access: invitation, redemption, grant uses and sessions" {
 
     const th = tokenHash("INV");
     const id = try testTerminalUser(&db, "ali");
-    try db.terminalInvite(id, .{ .nodes = "ist_*,pump??", .max_uses = 2 }, &th, t0 + 3600, t0);
+    try db.userSetNodes(id, "ist_*,pump??");
+    try db.terminalInvite(id, .{ .max_uses = 2 }, &th, t0 + 3600, t0);
     const p = (try db.terminalByToken(a, &th, t0)).?;
     try testing.expectEqualStrings("ali", p.name);
+    try testing.expectEqualStrings("ist_*,pump??", p.nodes);
     const tid = core.code.tokenId("INV");
     try testing.expectEqual(id, (try db.terminalByTokenId(a, &tid, t0)).?.id);
     try testing.expectEqual(@as(?[]const u8, null), p.user_key);
 
-    try db.terminalRedeem(id, "UALI", "JTI1", "<grant jwt>", 2, null);
+    try db.terminalRedeem(id, "UALI");
     // The invitation is used up; the key now identifies ali
     try testing.expect((try db.terminalByToken(a, &th, t0)) == null);
     try testing.expectEqualStrings("ali", (try db.terminalByKey(a, "UALI")).?.name);
-    try testing.expectError(error.NotFound, db.terminalRedeem(id, "UOTHER", "JTI2", "x", 1, null));
+    try testing.expectError(error.NotFound, db.terminalRedeem(id, "UOTHER"));
 
+    // Only the user's nodes
+    try testing.expectEqualStrings("this node is not among the user's nodes", (try db.terminalUse("UALI", "ank_gw1", "S0", t0 + 5)).denied);
     // Two uses allowed, the third is refused
-    try testing.expectEqual(Db.UseResult.allowed, try db.grantUse("JTI1", "ist_gw1", "S1", "UALI", t0 + 10));
-    try testing.expectEqual(Db.UseResult.allowed, try db.grantUse("JTI1", "pump07", "S2", "UALI", t0 + 20));
-    try testing.expectEqualStrings("no uses left", (try db.grantUse("JTI1", "ist_gw1", "S3", "UALI", t0 + 30)).denied);
-    try testing.expectEqual(@as(?i64, 2), try db.grantUses("JTI1"));
-    try testing.expectEqual(@as(?i64, 2), (try db.terminalGet(a, id)).?.uses);
-
-    // Somebody else presenting ali's grant; an unknown grant
-    try testing.expectEqualStrings("grant belongs to someone else", (try db.grantUse("JTI1", "ist_gw1", "S4", "UMALLORY", t0)).denied);
-    try testing.expectEqualStrings("unknown grant", (try db.grantUse("NOPE", "ist_gw1", "S5", "UALI", t0)).denied);
+    try testing.expectEqual(Db.UseResult.allowed, try db.terminalUse("UALI", "ist_gw1", "S1", t0 + 10));
+    try testing.expectEqual(Db.UseResult.allowed, try db.terminalUse("UALI", "pump07", "S2", t0 + 20));
+    try testing.expectEqualStrings("no uses left", (try db.terminalUse("UALI", "ist_gw1", "S3", t0 + 30)).denied);
+    try testing.expectEqual(@as(i64, 2), (try db.terminalGet(a, id)).?.uses);
+    // A key nobody has
+    try testing.expectEqualStrings("unknown key", (try db.terminalUse("UMALLORY", "ist_gw1", "S4", t0)).denied);
+    // The user's nodes change: they apply at once
+    try db.userSetNodes(id, "");
+    try db.terminalInvite(id, .{ .max_uses = 5 }, &tokenHash("INV1B"), t0 + 3600, t0);
+    try db.terminalRedeem(id, "UALI2");
+    try testing.expectEqualStrings("this node is not among the user's nodes", (try db.terminalUse("UALI2", "ist_gw1", "S5", t0)).denied);
+    try db.userSetNodes(id, "*");
+    try testing.expectEqual(Db.UseResult.allowed, try db.terminalUse("UALI2", "ank_gw1", "S6", t0));
+    // The key of the invitation before does not work any more
+    try testing.expectEqualStrings("unknown key", (try db.terminalUse("UALI", "ist_gw1", "S7", t0)).denied);
+    try testing.expectError(error.InvalidSpec, db.userSetNodes(id, "ist-*"));
 
     // Sessions: active until ended; end reports are idempotent
-    try testing.expectEqual(@as(usize, 2), (try db.sessionsActive(a)).len);
+    try testing.expectEqual(@as(usize, 3), (try db.sessionsActive(a)).len);
     try db.sessionEnd("S1", t0 + 100, 0);
     try db.sessionEnd("S1", t0 + 999, 1);
     const recent = try db.sessionsRecent(a, 10);
-    try testing.expectEqual(@as(usize, 2), recent.len);
-    try testing.expectEqualStrings("S2", recent[0].sid);
-    try testing.expectEqual(@as(?i64, t0 + 100), recent[1].ended);
-    try testing.expectEqual(@as(?i64, 0), recent[1].exit_status);
-    try testing.expectEqualStrings("ali", recent[1].user);
-    try testing.expectEqual(@as(usize, 1), (try db.sessionsActive(a)).len);
+    try testing.expectEqual(@as(usize, 3), recent.len);
+    const s1 = for (recent) |r| (if (std.mem.eql(u8, r.sid, "S1")) break r) else unreachable;
+    try testing.expectEqual(@as(?i64, t0 + 100), s1.ended);
+    try testing.expectEqual(@as(?i64, 0), s1.exit_status);
+    try testing.expectEqualStrings("ali", s1.user);
+    try testing.expectEqual(@as(usize, 2), (try db.sessionsActive(a)).len);
 }
 
 test "terminal access: expiry, revocation, and the right to connect" {
@@ -1756,17 +1725,18 @@ test "terminal access: expiry, revocation, and the right to connect" {
 
     const th = tokenHash("INV2");
     const id = try testTerminalUser(&db, "bot1");
-    try db.terminalInvite(id, .{ .kind = .bot, .nodes = "*", .grant_exp = t0 + 60 }, &th, t0 + 10, t0);
+    try db.userSetNodes(id, "*");
+    try db.terminalInvite(id, .{ .kind = .bot, .expires = t0 + 60 }, &th, t0 + 10, t0);
     // An invitation that is not used in time expires
     try testing.expect((try db.terminalByToken(a, &th, t0 + 10)) == null);
-    try db.terminalRedeem(id, "UBOT", "JTIB", "x", null, t0 + 60);
-    try testing.expectEqual(Db.UseResult.allowed, try db.grantUse("JTIB", "gw1", "B1", "UBOT", t0 + 59));
-    try testing.expectEqualStrings("access expired", (try db.grantUse("JTIB", "gw1", "B2", "UBOT", t0 + 60)).denied);
+    try db.terminalRedeem(id, "UBOT");
+    try testing.expectEqual(Db.UseResult.allowed, try db.terminalUse("UBOT", "gw1", "B1", t0 + 59));
+    try testing.expectEqualStrings("access expired", (try db.terminalUse("UBOT", "gw1", "B2", t0 + 60)).denied);
 
     // Without terminal:connect (the role taken), or blocked: no connecting
     try db.userRevoke(id, (try db.roleList(a))[2].id);
     try testing.expect((try db.terminalByKey(a, "UBOT")) == null);
-    try testing.expectEqualStrings("access revoked", (try db.grantUse("JTIB", "gw1", "B3", "UBOT", t0)).denied);
+    try testing.expectEqualStrings("access revoked", (try db.terminalUse("UBOT", "gw1", "B3", t0)).denied);
     try testing.expectEqualStrings("UBOT", (try db.terminalKeysDenied(a))[0]);
     try db.userGrant(id, (try db.roleList(a))[2].id);
     try testing.expect((try db.terminalByKey(a, "UBOT")) != null);
@@ -1776,20 +1746,20 @@ test "terminal access: expiry, revocation, and the right to connect" {
 
     try db.terminalRevoke(id);
     try testing.expect((try db.terminalByKey(a, "UBOT")) == null);
-    try testing.expectEqualStrings("access revoked", (try db.grantUse("JTIB", "gw1", "B3", "UBOT", t0)).denied);
+    try testing.expectEqualStrings("access revoked", (try db.terminalUse("UBOT", "gw1", "B3", t0)).denied);
     // A new invitation gives access again, with a new key
-    try db.terminalInvite(id, .{ .nodes = "*", .max_uses = 1 }, &tokenHash("INV3"), t0 + 10, t0);
+    try db.terminalInvite(id, .{ .max_uses = 1 }, &tokenHash("INV3"), t0 + 10, t0);
     try testing.expect((try db.terminalByToken(a, &tokenHash("INV3"), t0)) != null);
 }
 
-test "terminal access needs valid patterns and a limit" {
+test "an invitation needs a limit" {
     var db = try testDb();
     defer db.close();
     const th = tokenHash("X");
     const id = try testTerminalUser(&db, "xx");
-    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{ .nodes = "ist-*", .max_uses = 1 }, &th, t0 + 1, t0));
-    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{ .nodes = "ist_*" }, &th, t0 + 1, t0));
-    try testing.expectError(error.NotFound, db.terminalInvite(999, .{ .nodes = "ist_*", .max_uses = 1 }, &th, t0 + 1, t0));
+    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{}, &th, t0 + 1, t0));
+    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{ .max_uses = 0 }, &th, t0 + 1, t0));
+    try testing.expectError(error.NotFound, db.terminalInvite(999, .{ .max_uses = 1 }, &th, t0 + 1, t0));
 }
 
 test "settings and session logs" {

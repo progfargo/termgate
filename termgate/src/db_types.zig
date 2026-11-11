@@ -17,27 +17,29 @@ pub const NodeState = enum {
     disabled,
 };
 
-/// A user's terminal access: the grant spec an admin chose when giving it
-/// (tgterm --invite), and the user's key once the invitation is used.
+/// A user's terminal access: the invitation an admin made (tgterm --invite)
+/// with its limits, and the user's key once the invitation is used.
 /// Connecting also needs the right terminal:connect from the user's roles.
 pub const Terminal = struct {
     /// The user's id
     id: i64,
     /// The user's name
     name: []const u8,
-    kind: core.grant.Kind,
+    kind: TerminalKind,
     /// Set once the invitation is used
     user_key: ?[]const u8,
-    /// Node name patterns, comma separated
+    /// The user's node patterns, comma separated (user.nodes)
     nodes: []const u8,
+    /// Sessions the invitation allows; null: no limit
     max_uses: ?i64,
-    grant_exp: ?i64,
+    /// When the invitation's access ends; null: no end
+    expires: ?i64,
     revoked: bool,
     created: i64,
     /// Until when the invitation may be used (unused invitations)
     token_expires: ?i64,
-    /// Sessions used so far (null before the invitation is used)
-    uses: ?i64,
+    /// Sessions opened so far
+    uses: i64,
 };
 
 pub const Session = struct {
@@ -46,7 +48,6 @@ pub const Session = struct {
     user_key: []const u8,
     /// The user's name
     user: []const u8,
-    grant_jti: []const u8,
     started: i64,
     ended: ?i64,
     exit_status: ?i64,
@@ -96,6 +97,9 @@ pub const User = struct {
     locked_until: i64,
     disabled: bool,
     created: i64,
+    /// The nodes the user may reach with tgterm: name patterns (* any run,
+    /// ? one character), comma separated; empty: none
+    nodes: []const u8 = "",
 };
 
 /// A browser session; `full` once the second step is done.
@@ -160,12 +164,14 @@ pub const Action = struct {
 pub const NodeError = error{ InvalidName, Duplicate, NotFound, WrongState } || Error;
 pub const TerminalError = error{ InvalidSpec, NotFound, Duplicate } || Error;
 
-/// What terminal access a user gets (the grant's spec).
+/// A person or a program (a bot) using tgterm.
+pub const TerminalKind = enum { human, bot };
+
+/// An invitation's limits: how many sessions and/or until when. Which
+/// nodes is the user's (user.nodes).
 pub const TerminalSpec = struct {
-    kind: core.grant.Kind = .human,
-    /// Node name patterns, comma separated ("ist_*,pump??")
-    nodes: []const u8,
+    kind: TerminalKind = .human,
     max_uses: ?u32 = null,
-    /// When the grant ends; a grant needs this, max_uses or both
-    grant_exp: ?i64 = null,
+    /// When the access ends; an invitation needs this, max_uses or both
+    expires: ?i64 = null,
 };

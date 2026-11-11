@@ -1,10 +1,9 @@
 //! Code shared by the binaries (termgate, tgterm, tgnode):
-//! NATS client, nkeys, JWT, grants and TLS. No UI.
+//! NATS client, nkeys, JWT, auth callout, session approvals and TLS. No UI.
 
 pub const nkeys = @import("nkeys.zig");
 pub const jwt = @import("jwt.zig");
 pub const node = @import("node.zig");
-pub const grant = @import("grant.zig");
 pub const session = @import("session.zig");
 pub const e2e = @import("e2e.zig");
 pub const approval = @import("approval.zig");

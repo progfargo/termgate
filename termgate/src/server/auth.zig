@@ -272,7 +272,9 @@ const no_right = "you do not have the right to do this";
 /// users.*; the caller holds the lock. `token_hash`: the caller's session.
 fn userCall(auth: *Auth, a: std.mem.Allocator, name: []const u8, body: []const u8, c: *const Caller, token_hash: []const u8, now: i64) !Reply {
     const db = auth.db;
-    const Req = struct { id: i64 = 0, name: []const u8 = "", disabled: bool = false, role: i64 = 0 };
+    // nodes: the nodes the user may reach with tgterm (name patterns,
+    // comma separated); null: unchanged
+    const Req = struct { id: i64 = 0, name: []const u8 = "", disabled: bool = false, role: i64 = 0, nodes: ?[]const u8 = null };
     const req = std.json.parseFromSliceLeaky(Req, a, body, .{ .ignore_unknown_fields = true }) catch return fail(a, .bad_request, "bad request");
 
     if (std.mem.eql(u8, name, "list")) {
@@ -282,7 +284,7 @@ fn userCall(auth: *Auth, a: std.mem.Allocator, name: []const u8, body: []const u
         // `id`: that user only (a page about one user)
         const Filter = struct { id: i64 = 0, key: []const u8 = "", rid: i64 = 0, stat: []const u8 = "", pn: i64 = 1 };
         const f = std.json.parseFromSliceLeaky(Filter, a, body, .{ .ignore_unknown_fields = true }) catch Filter{};
-        const Row = struct { id: i64, name: []const u8, superuser: bool, disabled: bool, second_step: bool, created: i64, roles: []const dbm.RoleRef, terminal: ?dbm.Terminal };
+        const Row = struct { id: i64, name: []const u8, superuser: bool, disabled: bool, second_step: bool, created: i64, nodes: []const u8, roles: []const dbm.RoleRef, terminal: ?dbm.Terminal };
         var rows: std.ArrayList(Row) = .empty;
         // A user's roles are shown to who may see them
         const see_roles = c.can("user", "role_browse");
@@ -305,6 +307,7 @@ fn userCall(auth: *Auth, a: std.mem.Allocator, name: []const u8, body: []const u
                 .disabled = x.disabled,
                 .second_step = x.totp_confirmed,
                 .created = x.created,
+                .nodes = x.nodes,
                 .roles = if (see_roles) roles else &.{},
                 // Its terminal access, if one was given
                 .terminal = try db.terminalGet(a, x.id),
@@ -348,6 +351,13 @@ fn userCall(auth: *Auth, a: std.mem.Allocator, name: []const u8, body: []const u
         if (!c.can("user", "update")) return fail(a, .forbidden, no_right);
         if (target.is_superuser) return fail(a, .conflict, superuser_kept);
         if (req.disabled and target.id == c.id) return fail(a, .conflict, "you cannot block your own user");
+        if (req.nodes) |n| {
+            const nodes = std.mem.trim(u8, n, " ");
+            if (!std.mem.eql(u8, target.nodes, nodes)) db.userSetNodes(target.id, nodes) catch |e| switch (e) {
+                error.InvalidSpec => return fail(a, .bad_request, "nodes: name patterns, comma separated: lowercase letters, digits, _, * (any run) and ? (one character)"),
+                else => return userError(a, e),
+            };
+        }
         if (!std.mem.eql(u8, target.name, req.name)) db.userSetName(target.id, req.name) catch |e| return userError(a, e);
         if (target.disabled != req.disabled) db.userSetDisabled(target.id, req.disabled) catch |e| return userError(a, e);
         return .{ .body = "{\"ok\":true}" };

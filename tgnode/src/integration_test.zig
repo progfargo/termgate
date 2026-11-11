@@ -81,13 +81,11 @@ test "a session end to end: open, type, read output, exit, audit" {
     var inbox_buf: [80]u8 = undefined;
     const client = try connectUser(a, io, user, &inbox_buf);
     defer client.close();
-    const grant_tok = try core.grant.issue(a, t.issuer, .{ .user = &upub, .nodes = &.{"e2e_*"}, .max_uses = 3 }, now(io));
-    defer a.free(grant_tok);
 
     // tgterm's side of the key agreement
     const eph = core.e2e.Ephemeral.generate(io);
     const user_kx = eph.publicText();
-    const created = try core.session.create(a, io, user, grant_tok, "e2e_gw17", &user_kx, now(io));
+    const created = try core.session.create(a, io, user, "e2e_gw17", &user_kx, now(io));
     defer created.deinit(a);
     const req = created.body;
     const reply = try client.request("session.open.e2e_gw17", req, Conn.seconds(15));
@@ -98,12 +96,9 @@ test "a session end to end: open, type, read output, exit, audit" {
     try testing.expectEqual(@as(?[]const u8, null), r.value.@"error");
     const sid = r.value.sid.?;
     // The node's session key comes in termgate's signed approval
-    const g = try core.jwt.decode(a, core.grant.GrantClaims, grant_tok, now(io));
-    defer g.deinit();
     const ok = try core.approval.verifyForUser(a, r.value.approval.?, .{
         .issuers = &.{&t.issuer_pub},
         .user = &upub,
-        .grant_jti = g.value.jti.?,
         .node = "e2e_gw17",
         .nonce = &created.nonce,
         .kx_user = &user_kx,
@@ -192,20 +187,16 @@ test "termgate gone: open sessions are ended after the grace time" {
     var inbox_buf: [80]u8 = undefined;
     const client = try connectUser(a, io, user, &inbox_buf);
     defer client.close();
-    const grant_tok = try core.grant.issue(a, t.issuer, .{ .user = &upub, .nodes = &.{"e2e_*"}, .max_uses = 1 }, now(io));
-    defer a.free(grant_tok);
     const eph = core.e2e.Ephemeral.generate(io);
     const user_kx = eph.publicText();
-    const created = try core.session.create(a, io, user, grant_tok, "e2e_cut", &user_kx, now(io));
+    const created = try core.session.create(a, io, user, "e2e_cut", &user_kx, now(io));
     defer created.deinit(a);
     const reply = try client.request("session.open.e2e_cut", created.body, Conn.seconds(15));
     defer reply.deinit(a);
     const Reply = struct { sid: []const u8, approval: []const u8 };
     const r = try std.json.parseFromSlice(Reply, a, reply.payload, .{});
     defer r.deinit();
-    const g = try core.jwt.decode(a, core.grant.GrantClaims, grant_tok, now(io));
-    defer g.deinit();
-    const ok = try core.approval.verifyForUser(a, r.value.approval, .{ .issuers = &.{&t.issuer_pub}, .user = &upub, .grant_jti = g.value.jti.?, .node = "e2e_cut", .nonce = &created.nonce, .kx_user = &user_kx, .now = now(io) });
+    const ok = try core.approval.verifyForUser(a, r.value.approval, .{ .issuers = &.{&t.issuer_pub}, .user = &upub, .node = "e2e_cut", .nonce = &created.nonce, .kx_user = &user_kx, .now = now(io) });
     defer a.free(ok.sid);
     defer a.free(ok.kx_node);
     const keys = try eph.keys(try core.e2e.decodePublic(ok.kx_node), ok.sid, &user_kx, ok.kx_node);
@@ -255,10 +246,8 @@ test "termgate not answering approvals: the session is refused" {
     var inbox_buf: [80]u8 = undefined;
     const client = try connectUser(a, io, user, &inbox_buf);
     defer client.close();
-    const grant_tok = try core.grant.issue(a, t.issuer, .{ .user = &upub, .nodes = &.{"e2e_*"}, .max_uses = 1 }, now(io));
-    defer a.free(grant_tok);
     const kx = core.e2e.Ephemeral.generate(io).publicText();
-    const created = try core.session.create(a, io, user, grant_tok, "e2e_lonely", &kx, now(io));
+    const created = try core.session.create(a, io, user, "e2e_lonely", &kx, now(io));
     defer created.deinit(a);
     const reply = try client.request("session.open.e2e_lonely", created.body, Conn.seconds(30));
     defer reply.deinit(a);

@@ -46,7 +46,7 @@ pub fn registering(arena: std.mem.Allocator, token_id: []const u8, key: []const 
 }
 
 /// Someone using an invitation: may only send their public key to
-/// invite.<token id> and read the answer (their grant).
+/// invite.<token id> and read the answer (termgate's issuer key).
 pub fn redeeming(arena: std.mem.Allocator, token_id: []const u8, key: []const u8) !jwt.UserNats {
     const pubs = try arena.alloc([]const u8, 1);
     pubs[0] = try std.fmt.allocPrint(arena, "invite.{s}", .{token_id});

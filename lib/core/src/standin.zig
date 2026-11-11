@@ -40,9 +40,8 @@ pub const Termgate = struct {
     reg_token: ?[]const u8 = null,
     reg_name: []const u8 = "",
     reg_requests: u32 = 0,
-    /// One open invitation: token and the grant spec it stands for
+    /// One open invitation (its token)
     invite_token: ?[]const u8 = null,
-    invite_spec: core.grant.Spec = undefined,
     deny_sessions: bool = false,
     /// PEM of the test CA (the caller embeds lib/core/testdata/ca.pem)
     ca_pem: []const u8,
@@ -101,13 +100,11 @@ pub const Termgate = struct {
         t.user_count += 1;
     }
 
-    /// The admin invited someone: this token stands for `spec` (spec.user is
-    /// filled in when the invitation is used).
-    pub fn expectInvitation(t: *Termgate, token: []const u8, spec: core.grant.Spec) void {
+    /// The admin invited someone with this token.
+    pub fn expectInvitation(t: *Termgate, token: []const u8) void {
         t.mutex.lockUncancelable(t.io);
         defer t.mutex.unlock(t.io);
         t.invite_token = token;
-        t.invite_spec = spec;
     }
 
     /// The admin created node `name` and got this node key token.
@@ -222,7 +219,7 @@ pub const Termgate = struct {
     }
 
     /// An invitation is used: bind the key to the user, mark the token
-    /// used, answer with the grant.
+    /// used, answer with termgate's issuer key (which signs approvals).
     fn answerInvite(t: *Termgate, m: Conn.Message, reply: []const u8) !void {
         var arena: std.heap.ArenaAllocator = .init(t.gpa);
         defer arena.deinit();
@@ -232,13 +229,10 @@ pub const Termgate = struct {
         const k = core.nkeys.PublicKey.decode(req.user_key) catch return error.InvalidKey;
         if (k.prefix != .user) return error.InvalidKey;
         t.mutex.lockUncancelable(t.io);
-        var spec = t.invite_spec;
         t.invite_token = null; // single use
         t.mutex.unlock(t.io);
-        spec.user = req.user_key;
-        const g = try core.grant.issue(a, t.issuer, spec, t.now());
         t.addUser(req.user_key);
-        try t.app.publish(reply, try std.json.Stringify.valueAlloc(a, .{ .grant = g }, .{}));
+        try t.app.publish(reply, try std.json.Stringify.valueAlloc(a, .{ .issuer = @as([]const u8, &t.issuer_pub) }, .{}));
     }
 
     fn answerAuthorize(t: *Termgate, m: Conn.Message, reply: []const u8) !void {
@@ -246,9 +240,8 @@ pub const Termgate = struct {
         defer arena.deinit();
         const a = arena.allocator();
         const req = try std.json.parseFromSliceLeaky(core.approval.Request, a, m.payload, .{});
-        const g = try core.grant.verify(a, req.grant, .{ .issuers = &.{&t.issuer_pub}, .node = req.node, .user = null, .now = t.now() });
         const decision: core.approval.Decision = if (t.deny_sessions) .{ .deny = "no uses left" } else .allow;
-        const tok = try core.approval.issue(a, t.issuer, req, g.value.sub, g.value.jti.?, decision, t.now());
+        const tok = try core.approval.issue(a, t.issuer, req, decision, t.now());
         try t.app.publish(reply, tok);
     }
 };

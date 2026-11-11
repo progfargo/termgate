@@ -67,18 +67,10 @@ pub fn run(gpa: std.mem.Allocator, io: Io, p: Profile, node: []const u8) !u8 {
     };
     defer conn.close();
 
-    // Our grant: who issued it (termgate, as we got it with the invitation)
-    // and its id, to check termgate's approval against
-    const g = core.jwt.decodeLeeway(gpa, core.grant.GrantClaims, p.grant, now(io), std.math.maxInt(i32)) catch {
-        say("tgterm: the stored grant is not valid; use a new invitation\n", .{});
-        return failed;
-    };
-    defer g.deinit();
-
     // Open the session, with our session public key (end to end)
     const eph = core.e2e.Ephemeral.generate(io);
     const user_kx = eph.publicText();
-    const req = try core.session.create(gpa, io, key, p.grant, node, &user_kx, now(io));
+    const req = try core.session.create(gpa, io, key, node, &user_kx, now(io));
     defer req.deinit(gpa);
     var subj_buf: [160]u8 = undefined;
     const answer = conn.request(try std.fmt.bufPrint(&subj_buf, "session.open.{s}", .{node}), req.body, Conn.seconds(20)) catch |e| {
@@ -103,9 +95,8 @@ pub fn run(gpa: std.mem.Allocator, io: Io, p: Profile, node: []const u8) !u8 {
     // The node's session key, from termgate's signed approval: the relay
     // cannot have swapped it
     const ok = core.approval.verifyForUser(gpa, reply.value.approval orelse "", .{
-        .issuers = &.{g.value.iss},
+        .issuers = &.{p.issuer},
         .user = &upub,
-        .grant_jti = g.value.jti orelse "",
         .node = node,
         .nonce = &req.nonce,
         .kx_user = &user_kx,

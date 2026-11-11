@@ -5,7 +5,8 @@
 //!    (core.bootstrap.fetchCa); nothing secret is sent before that.
 //! 3. Connect, verifying the relay, with the invitation's token as auth token,
 //!    and send the public key to invite.<token id>. termgate binds the key to
-//!    the user, uses up the token and answers with the grant.
+//!    the user, uses up the token and answers with its issuer key (which
+//!    signs session approvals).
 //! 4. Return the profile to store.
 
 const std = @import("std");
@@ -52,10 +53,10 @@ pub fn redeem(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, code_tex
         else => return e,
     };
     defer m.deinit(gpa);
-    const Answer = struct { grant: ?[]const u8 = null, @"error": ?[]const u8 = null };
+    const Answer = struct { issuer: ?[]const u8 = null, @"error": ?[]const u8 = null };
     const ans = std.json.parseFromSliceLeaky(Answer, arena, m.payload, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch
         return error.Refused;
-    const grant = ans.grant orelse return error.Refused;
+    const issuer = ans.issuer orelse return error.Refused;
 
     const seed = key.encodeSeed();
     return .{
@@ -63,6 +64,6 @@ pub fn redeem(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, code_tex
         .relay_port = code.port,
         .ca_pem = ca_pem,
         .seed = try arena.dupe(u8, &seed),
-        .grant = grant,
+        .issuer = issuer,
     };
 }

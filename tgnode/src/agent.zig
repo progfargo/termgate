@@ -6,8 +6,8 @@
 //! connecting and whenever termgate asks (status.req.<node>, status.req.all).
 //!
 //! Session flow (see docs/architecture.md):
-//!   session.open.<node>  request from tgterm, verified (grant, signature,
-//!                        freshness, replay)
+//!   session.open.<node>  request from tgterm, verified (the user's
+//!                        signature, freshness, replay)
 //!   authorize.<node>     request to termgate; its signed approval must match
 //!   PTY                  reply {"sid": ..., "approval": ...} to tgterm
 //!
@@ -69,7 +69,7 @@ pub const Agent = struct {
     /// Used only by the session.open loop, so no lock is needed
     replay: core.session.ReplayCache,
     sessions: Io.Group = .init,
-    /// Trusted signers of grants and approvals: termgate's issuer key
+    /// Trusted signer of approvals: termgate's issuer key
     issuers: [1][]const u8,
     /// Root for sysinfo (/ in production)
     root: Io.Dir,
@@ -224,13 +224,11 @@ pub const Agent = struct {
     fn handleOpen(a: *Agent, body: []const u8, reply: []const u8) !void {
         const gpa = a.gpa;
         const v = try core.session.verify(gpa, body, .{
-            .issuers = &a.issuers,
             .node = a.cfg.name,
             .now = a.now(),
             .replay = &a.replay,
         });
         defer v.deinit();
-        const g = v.grant.value;
 
         // Session id: 16 random bytes, base64url (a valid subject token)
         var raw: [16]u8 = undefined;
@@ -247,8 +245,8 @@ pub const Agent = struct {
         const keys_box = try core.e2e.sealForTermgate(gpa, a.io, issuer, keys, &sid, v.kx, &node_kx);
         defer gpa.free(keys_box);
 
-        // Ask termgate
-        const areq: core.approval.Request = .{ .grant = v.grant_token, .node = a.cfg.name, .nonce = v.nonce, .sid = &sid, .kx_user = v.kx, .kx_node = &node_kx, .keys = keys_box };
+        // Ask termgate: it decides from its database
+        const areq: core.approval.Request = .{ .user = v.user, .node = a.cfg.name, .nonce = v.nonce, .sid = &sid, .kx_user = v.kx, .kx_node = &node_kx, .keys = keys_box };
         const areq_json = try std.json.Stringify.valueAlloc(gpa, areq, .{});
         defer gpa.free(areq_json);
         var auth_buf: [96]u8 = undefined;
@@ -262,7 +260,7 @@ pub const Agent = struct {
         };
         defer answer.deinit(gpa);
 
-        const expect: core.approval.Expect = .{ .issuers = &a.issuers, .request = areq, .user = g.sub, .grant_jti = g.jti orelse "", .now = a.now() };
+        const expect: core.approval.Expect = .{ .issuers = &a.issuers, .request = areq, .now = a.now() };
         core.approval.verify(gpa, answer.payload, expect) catch |e| switch (e) {
             error.Denied => {
                 const why = try core.approval.denialReason(gpa, answer.payload, expect);
@@ -276,7 +274,7 @@ pub const Agent = struct {
         // termgate answered: it is there
         a.cut.store(false, .release);
         // Open the shell and hand the session to its own task
-        const s = try Session.create(a, g.sub, g.jti orelse "", &sid, keys);
+        const s = try Session.create(a, v.user, &sid, keys);
         errdefer {
             s.shell.hangup();
             _ = s.shell.wait();
@@ -292,7 +290,7 @@ pub const Agent = struct {
         try a.conn.flush(Conn.seconds(5));
         try a.sessions.concurrent(a.io, Session.run, .{s});
         try a.conn.publish(reply, ok);
-        log.info("session {s} opened for {s}", .{ &sid, g.sub });
+        log.info("session {s} opened for {s}", .{ &sid, v.user });
     }
 };
 
@@ -300,7 +298,6 @@ const Session = struct {
     agent: *Agent,
     shell: pty.Shell,
     user: []u8,
-    grant_jti: []u8,
     sid: [22]u8,
     /// out.<node>.<user>.<sid> (".data" / ".end" appended when publishing)
     out_subject: []u8,
@@ -314,7 +311,7 @@ const Session = struct {
     output_lock: Io.Mutex = .init,
     done: std.atomic.Value(bool) = .init(false),
 
-    fn create(a: *Agent, user: []const u8, grant_jti: []const u8, sid: *const [22]u8, keys: core.e2e.Keys) !*Session {
+    fn create(a: *Agent, user: []const u8, sid: *const [22]u8, keys: core.e2e.Keys) !*Session {
         const gpa = a.gpa;
         const s = try gpa.create(Session);
         errdefer gpa.destroy(s);
@@ -329,7 +326,6 @@ const Session = struct {
             .output = .{ .key = keys.down, .sender = .node },
             .shell = shell,
             .user = try gpa.dupe(u8, user),
-            .grant_jti = try gpa.dupe(u8, grant_jti),
             .sid = sid.*,
             .out_subject = try std.fmt.allocPrint(gpa, "out.{s}.{s}.{s}", .{ a.cfg.name, user, sid }),
             .in_subject = try std.fmt.allocPrint(gpa, "in.{s}.{s}.{s}.*", .{ a.cfg.name, user, sid }),
@@ -340,7 +336,6 @@ const Session = struct {
     fn destroy(s: *Session) void {
         const gpa = s.agent.gpa;
         gpa.free(s.user);
-        gpa.free(s.grant_jti);
         gpa.free(s.out_subject);
         gpa.free(s.in_subject);
         gpa.destroy(s);
@@ -436,7 +431,6 @@ const Session = struct {
             .node = a.cfg.name,
             .sid = @as([]const u8, &s.sid),
             .user = s.user,
-            .grant = s.grant_jti,
             .at = a.now(),
             .status = status,
         }, .{}) catch return;

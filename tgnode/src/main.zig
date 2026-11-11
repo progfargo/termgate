@@ -1,5 +1,6 @@
 //! tgnode: the gateway agent. Derives its identity from the hardware,
-//! verifies grants, opens a shell on a PTY and publishes audit events.
+//! asks termgate to approve each session, opens a shell on a PTY and
+//! publishes audit events.
 //! Keeps no secrets on disk.
 //!
 //! Usage:

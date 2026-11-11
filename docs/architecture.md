@@ -7,14 +7,14 @@ termgate is a web application the customer runs on a server: the online authorit
 ## Features
 
 - Terminal access to devices behind NAT/CGNAT, without static IPs, even while moving. No open port on the gateway.
-- Access by invitation: time-limited (`exp`), N-use (`max_uses`), or both.
+- Access by invitation: time-limited, N-use, or both. The invitation is a key and nothing more; its limits and the user's nodes are in termgate's database, checked at every session.
 - Per-node authorization: the invitation fixes which nodes. A session runs as the user tgnode runs as, with that user's permissions on the device.
 - Instant revocation; active sessions are cut as well.
 - Hardware-bound node identity: a copied binary does not work on another device.
 - Live monitoring of active sessions (read-only mirror) and killing them.
 - Asset management: every node's status (online/offline), last seen time and system info (OS, memory, disk).
 - AI bots are users too and access through the same model; they publish status and can ask the admin questions.
-- Audit: session start/end, who, which node, which grant. Recorded by termgate.
+- Audit: session start/end, who, which node. Recorded by termgate.
 - Session logs: every command of every session and its output (up to a set length), kept for a set number of days. Sessions have a maximum length.
 - Each customer runs separate infrastructure. The vendor has no access.
 
@@ -22,9 +22,9 @@ termgate is a web application the customer runs on a server: the online authorit
 
 | Binary | Runs on | Role | Secrets held |
 |---|---|---|---|
-| **termgate** | Customer server (with the relay, or a machine in the customer's own network) | Auth callout for every connection; node registration, invitations, grants, revocation; approves sessions and counts uses; session logs, audit and node status (SQLite); the web panel for admins and auditors (users, roles) | Issuer key, its NATS keys, CA key, log key |
+| **termgate** | Customer server (with the relay, or a machine in the customer's own network) | Auth callout for every connection; node registration, invitations, revocation; approves every session from its database and counts uses; session logs, audit and node status (SQLite); the web panel for admins and auditors (users, roles) | Issuer key, its NATS keys, CA key, log key |
 | **tgterm** | User's terminal (CLI) | Like `ssh`: node list, session in the user's own terminal, headless mode for bots | Its own user key |
-| **tgnode** | Gateway | Grant and proof verification, asks termgate for approval, PTY, audit events, system info | None (key derived from hardware) |
+| **tgnode** | Gateway | Checks that a session request is signed by the user's key, asks termgate for approval, PTY, audit events, system info | None (key derived from hardware) |
 
 ```
 browsers ──HTTPS──► nginx ──► termgate ──┐
@@ -34,7 +34,7 @@ browsers ──HTTPS──► nginx ──► termgate ──┐
 
 One program to install: termgate starts the relay (the official nats-server) itself from the kit in its home and keeps it running; when termgate stops, the relay stops, and with it every connection. A customer who does not want this on a hosted server installs it on a machine in their own office and opens the relay port (and, if they wish, the panel) from there.
 
-The relay process still holds no access-granting key: on its own it can drop traffic but cannot open a session on any node, since grants and session approvals are signed by termgate's issuer key and nodes verify them themselves. Session data is end-to-end encrypted, so the relay does not see it either.
+The relay process still holds no access-granting key: on its own it can drop traffic but cannot open a session on any node, since session approvals are signed by termgate's issuer key and nodes verify them themselves. Session data is end-to-end encrypted, so the relay does not see it either.
 
 ## Identity
 
@@ -44,7 +44,7 @@ Identity is checked once per connection, not per message: after the callout, NAT
 
 | Key | Held by | Used for |
 |---|---|---|
-| Issuer key (Ed25519 nkey) | termgate | Signs the per-connection user JWTs (callout answers), grants and session approvals |
+| Issuer key (Ed25519 nkey) | termgate | Signs the per-connection user JWTs (callout answers) and session approvals |
 | termgate's NATS keys | termgate | Three connections: callout user (AUTH account) and system user (SYS account) bypass the callout; the application key goes through it |
 | Hardware key | Derived from the node's hardware | Signs the server nonce when the node connects |
 | User key | The user's machine (tgterm) | Signs the server nonce; signs session requests |
@@ -55,26 +55,15 @@ Identity is checked once per connection, not per message: after the callout, NAT
 - **Callout:** a connecting client signs the server's nonce with its key; termgate verifies that signature and looks the key up: an approved node, a known user, or a key presenting a node key or invitation (sent as the connection's auth token).
 - **TLS:** clients trust only termgate's CA; no domain needed. CA and relay keys are ECDSA P-256 (Zig's TLS client does not accept Ed25519 server keys). The relay uses `handshake_first`, so TLS starts with the first byte.
 
-## Grant
+## Who may open a session
 
-A grant is a JWT in the same format as NATS JWTs, signed by termgate's issuer key. Its `nats` section has `type: "grant"`, so a grant is never accepted as a user JWT and vice versa.
+Nothing that says what a user may do travels with the user. The invitation is a key (a random token) that termgate looks up in its database; once used, the user's own key is what termgate looks up. Every session is decided by termgate from its database when the node asks for approval:
 
-```json
-{
-  "jti": "...", "iat": 1794289057, "iss": "<termgate issuer key>", "name": "ali",
-  "sub": "U...user pub", "nbf": 1794289057, "exp": 1794292657,
-  "nats": {
-    "type": "grant", "version": 1, "kind": "human | bot",
-    "nodes": ["gw17", "pump??", "ist_*"], "max_uses": 3
-  }
-}
-```
+- the user may connect: not blocked, its access not revoked, a role gives it terminal:connect;
+- the node matches one of the user's node patterns (`user.nodes`, set on the Users page: names or globs, `*` any run of characters, `?` exactly one, e.g. `ist_*`, `pump??`);
+- the invitation has not ended (its end time) and has uses left (its number of sessions); termgate counts the use in the same transaction, so the limit holds across all nodes.
 
-- `nodes` holds name patterns written by the admin: `*` matches any run of characters, `?` exactly one (e.g. `ist_*`, `pump??`).
-- tgnode verifies offline: signature, `exp`/`nbf` (5 min leeway), `type`, that `iss` is termgate's issuer key, that `sub` is the requesting user, and that its own name matches a pattern in `nodes`.
-- A grant is limited by `exp`, by `max_uses`, or by both; at least one is required.
-- `max_uses` is counted by termgate (SQLite, keyed by the grant's `jti`) when it approves a session, so the limit holds across all matching nodes.
-- Revocation: termgate marks the grant or user as revoked and stops approving; active sessions get `.end`, and the user's connections are closed (the callout refuses them from then on).
+A change to any of these applies to the next session. Revoking ends active sessions with `.end` and closes the user's connections (the callout refuses them from then on).
 
 ## Flows
 
@@ -110,20 +99,20 @@ tg1-relay.example.com:4222-<CA fingerprint>-<token>
 ```
 
 - CA fingerprint: SHA-256 of the termgate CA certificate, base32. tgterm only accepts a relay whose TLS chain ends in this CA.
-- Token: 32 random bytes, base32, single use. termgate stores only its SHA-256 together with the grant spec.
+- Token: 32 random bytes, base32, single use. termgate stores only its SHA-256 together with the invitation's limits (sessions and/or end time).
 
 Using it: `tgterm --invite tg1-... ist_kadikoy_gw01`.
 1. tgterm generates the user's key pair.
 2. It connects to the relay with the invitation token as auth token, signing the server nonce with the new key.
-3. The callout checks the token, marks it used and binds the public key to the user and its grant; the connection gets that user's permissions. termgate also sends tgterm the grant.
-4. tgterm stores its key, the relay address, the CA and the grant. Later connections use only the key; the callout recognizes it.
+3. The callout checks the token and lets the connection ask `invite.<token id>` with the new public key; termgate binds the key to the user and uses up the token. It answers with its issuer key, with which tgterm checks termgate's session approvals.
+4. tgterm stores its key, the relay address, the CA and termgate's issuer key. Later connections use only the key; the callout recognizes it.
 
 If termgate is not running, the connection is refused ("termgate is offline"). The token is useless once used.
 
 **Session**
-1. tgterm sends a session request to `session.open.<node>`: the grant, the node name, a timestamp and a random nonce, signed with the user key named in the grant's `sub`. NATS does not tell the receiver who published a message, so this signature is the proof that the requester holds the grant's key.
-2. tgnode verifies the grant, the signature, that the timestamp is within the 5 min leeway and that the nonce has not been used (replay cache).
-3. tgnode asks termgate for approval with a request to `authorize.<node>` (grant, nonce, session id). termgate checks revocation and `max_uses`, counts the use, records the session start and replies with an approval signed by the issuer key that echoes the nonce. No responder means termgate is offline: the session is refused.
+1. tgterm sends a session request to `session.open.<node>`: its public key, the node name, a timestamp and a random nonce, signed with its key. NATS does not tell the receiver who published a message, so this signature is the proof that the requester holds the key.
+2. tgnode verifies the signature, that the timestamp is within the 5 min leeway and that the nonce has not been used (replay cache).
+3. tgnode asks termgate for approval with a request to `authorize.<node>` (the user's key, nonce, session id). termgate decides from its database (see "Who may open a session"), counts the use, records the session start and replies with an approval signed by the issuer key that echoes the user, node and nonce. No responder means termgate is offline: the session is refused.
 4. tgnode verifies the approval, opens a PTY (a shell of the user tgnode runs as) and returns a `sid`.
 5. Data flow (tgnode subscribes to `in.<node>.<user>.<sid>.*`):
    - `in.<node>.<user>.<sid>.data`: input
@@ -134,7 +123,7 @@ If termgate is not running, the connection is refused ("termgate is offline"). T
 7. termgate closed means the system is closed, also for open sessions: while it has open sessions, tgnode asks termgate every 10 s whether it is there (`audit.<node>`, event "alive"). With no answer for 60 s (a termgate restart or a short relay outage fits in that) it tells the users on their screens and ends the sessions; nobody would log, watch or time-limit them.
 
 **End-to-end encryption of session data.** TLS protects each connection to the relay, but inside the relay messages are in clear. Session data (`in.<...>.data`, `out.<...>.data`) is therefore encrypted between tgterm and tgnode; the relay, and whoever runs or breaks into its server, sees only ciphertext.
-- Key agreement, X25519 with one key pair per session on each side: tgterm's public key is in its signed session request; tgnode's goes to termgate in the approval request and comes back in termgate's signed approval, which tgnode passes to tgterm and tgterm verifies (signed by the issuer of its grant, for its user, nonce and key). The relay can replace neither key unnoticed.
+- Key agreement, X25519 with one key pair per session on each side: tgterm's public key is in its signed session request; tgnode's goes to termgate in the approval request and comes back in termgate's signed approval, which tgnode passes to tgterm and tgterm verifies (signed by termgate's issuer key, for its user, node, nonce and key). The relay can replace neither key unnoticed.
 - Both derive two keys with HKDF (bound to the session id and both public keys): one per direction. Each message is ChaCha20-Poly1305 with sender and counter as nonce; a receiver refuses a counter it has seen, and anything that does not decrypt is dropped (a relay cannot type into a session or write on the user's screen).
 - termgate logs and watches sessions, so tgnode gives it the session keys in the approval request, sealed to termgate's issuer key (converted to X25519) and bound to the session id and both public keys. termgate refuses the session if they do not open, and stores them encrypted with the log key. Its own messages on the user's screen (session time limit) are encrypted with the session key as a third sender.
 - Not encrypted: window sizes and the end of a session (no content), and subjects (who talks to which node, when, how much).
@@ -161,7 +150,7 @@ If termgate is not running, the connection is refused ("termgate is offline"). T
 - Contents: tgnode version, hostname, OS, kernel, architecture, CPU count, uptime, load average, memory total/available, disk total/free for the root filesystem.
 
 **AI bot**
-- Invited with a `kind: bot` grant.
+- Invited as a bot (the invitation's kind).
 - Connects with `tgterm --headless`.
 - Publishes a one-line status to `bot.status.<user>`.
 - Asks questions over `bot.ask.<user>` (request/reply); the answer comes from termgate.
@@ -189,7 +178,7 @@ If termgate is not running, the connection is refused ("termgate is offline"). T
 | `bot.ask.<user>` | bot (request) | termgate (reply) |
 | `_INBOX.<user>.>`, `_INBOX.<node>.>` | replies to requests | that user or node only |
 
-Putting `<user>` into the session subjects lets NATS keep users apart: one user cannot read another user's output or type into their session. Node name patterns in grants cannot be expressed as NATS permissions (NATS wildcards match whole tokens), so tgnode enforces those; NATS enforces who may use which subjects.
+Putting `<user>` into the session subjects lets NATS keep users apart: one user cannot read another user's output or type into their session. Node name patterns cannot be expressed as NATS permissions (NATS wildcards match whole tokens), so termgate checks them at each approval; NATS enforces who may use which subjects.
 
 Permissions termgate gives each connection (in its callout answer):
 
@@ -201,7 +190,7 @@ Permissions termgate gives each connection (in its callout answer):
 | user / bot `<user>` | `session.open.*`, `in.*.<user>.>`, `bot.status.<user>`, `bot.ask.<user>` | `out.*.<user>.>`, `_INBOX.<user>.>` |
 | termgate | everything | everything |
 
-- A user may send `session.open` to any node; the node rejects it unless the grant's patterns match. Session ids are random, and `in`/`out` subjects carry the user key, so a user can only reach sessions opened with their own key.
+- A user may send `session.open` to any node; termgate refuses the approval unless the node matches the user's patterns. Session ids are random, and `in`/`out` subjects carry the user key, so a user can only reach sessions opened with their own key.
 - tgterm and tgnode use `_INBOX.<user>` / `_INBOX.<node>` as inbox prefix so replies cannot be read by others.
 - System info goes to `status.<node>`, which only termgate may subscribe to; users do not see other nodes or users.
 
@@ -220,7 +209,7 @@ There is no JetStream: the relay keeps no state. Use counters, invitations, audi
 | NATS client | Our own (`lib/core`): core protocol, request/reply |
 | NATS server | Official `nats-server` binary, started and kept running by termgate itself (the relay); fixed configuration with auth callout, no JetStream |
 | PTY (tgnode) | `openpty` + `fork` on Linux, ConPTY on Windows |
-| Local data (termgate) | SQLite: nodes and their last status, invitations (token hashes), grants and use counts, audit. |
+| Local data (termgate) | SQLite: nodes and their last status, users with their node patterns, invitations (token hashes) with their limits and use counts, audit. |
 | Targets | termgate and tgterm: Linux, Windows, macOS. tgnode: linux amd64/arm64/arm5-7, windows amd64 |
 
 ## Layout
@@ -228,7 +217,7 @@ There is no JetStream: the relay keeps no state. Use counters, invitations, audi
 ```
 termgate/
   docs/        design
-  lib/core/    shared Zig package: nats, nkeys, jwt, grant, tls (no UI)
+  lib/core/    shared Zig package: nats, nkeys, jwt, auth callout, session requests and approvals, tls (no UI)
   termgate/    the authority, its web panel and the relay: the server
                program and its API (src/server), the panel's single-page
                app (src/spa, one file per page under src/spa/pages) and
@@ -267,7 +256,7 @@ Each binary builds on its own with its own `build.zig` and `build.zig.zon`, and 
 
 **Deployment: single tenant, open source, no license.** Each customer runs its own termgate (on a server) and its own relay. termgate holds the customer's keys; the relay holds none. The vendor runs no part of the customer's system and has no access to it.
 
-**Security boundary.** termgate protects access to the nodes: only termgate's decisions open sessions, the relay holds no key, NATS keeps every connection to its own subjects. It does not protect against someone who controls the server termgate runs on: termgate's keys sit in its folder, readable by its service account only (0600). Keeping that server safe is the customer's job. The web panel is the exposed part: a customer who finds that too risky installs termgate on a machine in their own office and decides themselves who can reach it. The same holds for a user: tgterm keeps the user's key in a file readable by that user only, like an SSH key; keeping it is the user's job. A stolen user key is limited by the grant (uses, expiry), can be revoked by the admin at once, and every session it opens is logged. Session logs are additionally encrypted in the database (log key in the folder), so a copy of the database alone cannot be read.
+**Security boundary.** termgate protects access to the nodes: only termgate's decisions open sessions, the relay holds no key, NATS keeps every connection to its own subjects. It does not protect against someone who controls the server termgate runs on: termgate's keys sit in its folder, readable by its service account only (0600). Keeping that server safe is the customer's job. The web panel is the exposed part: a customer who finds that too risky installs termgate on a machine in their own office and decides themselves who can reach it. The same holds for a user: tgterm keeps the user's key in a file readable by that user only, like an SSH key; keeping it is the user's job. A stolen user key is limited by the invitation (uses, end time) and the user's nodes, can be revoked by the admin at once, and every session it opens is logged. Session logs are additionally encrypted in the database (log key in the folder), so a copy of the database alone cannot be read.
 
 ## Origin: the farlogin prototype
 

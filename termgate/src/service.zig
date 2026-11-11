@@ -32,7 +32,7 @@ pub const Config = struct {
     relay_port: u16,
     /// PEM of termgate's CA (also served on ca.get)
     ca_pem: []const u8,
-    /// Signs callout answers, grants and approvals
+    /// Signs callout answers and session approvals
     issuer: KeyPair,
     /// termgate's user in the AUTH account (bypasses the callout)
     callout_user: KeyPair,
@@ -678,23 +678,11 @@ pub const Service = struct {
         defer s.lock.unlock(s.io);
         const p = (try s.db.terminalByTokenId(a, lastToken(m.subject), s.now())) orelse
             return s.reply(m, "{\"error\":\"unknown, used or expired invitation\"}");
-
-        var patterns: std.ArrayList([]const u8) = .empty;
-        var it = std.mem.splitScalar(u8, p.nodes, ',');
-        while (it.next()) |pat| try patterns.append(a, pat);
-        const max_uses: ?u32 = if (p.max_uses) |x| @intCast(x) else null;
-        const g = try core.grant.issue(a, s.cfg.issuer, .{
-            .user = req.user_key,
-            .name = p.name,
-            .kind = p.kind,
-            .nodes = patterns.items,
-            .max_uses = max_uses,
-            .exp = p.grant_exp,
-        }, s.now());
-        const parsed = try core.jwt.decode(a, core.grant.GrantClaims, g, s.now());
-        try s.db.terminalRedeem(p.id, req.user_key, parsed.value.jti.?, g, max_uses, p.grant_exp);
+        // The key now stands for the user; everything else stays in the
+        // database. tgterm gets only the key that signs the approvals.
+        try s.db.terminalRedeem(p.id, req.user_key);
         log.info("invitation used by {s}", .{p.name});
-        try s.reply(m, try std.json.Stringify.valueAlloc(a, .{ .grant = g }, .{}));
+        try s.reply(m, try std.json.Stringify.valueAlloc(a, .{ .issuer = @as([]const u8, &s.issuer_pub) }, .{}));
     }
 
     /// authorize.<node>: a node asks whether a session may open.
@@ -707,11 +695,6 @@ pub const Service = struct {
         // tells which node is asking
         const node = lastToken(m.subject);
         if (!std.mem.eql(u8, node, req.node)) return error.NodeMismatch;
-        const g = core.grant.verify(a, req.grant, .{ .issuers = &.{&s.issuer_pub}, .node = node, .user = null, .now = s.now() }) catch |e| {
-            log.warn("authorize {s}: grant rejected: {s}", .{ node, @errorName(e) });
-            return;
-        };
-        const jti = g.value.jti orelse return error.InvalidGrant;
 
         // The session keys, sealed to us by the node and bound to both public
         // keys: if they do not open, the request was changed on the way
@@ -719,7 +702,7 @@ pub const Service = struct {
         const decision: core.approval.Decision = if (keys == null) .{ .deny = "the session keys do not check" } else blk: {
             s.lock.lockUncancelable(s.io);
             defer s.lock.unlock(s.io);
-            const d: core.approval.Decision = switch (try s.db.grantUse(jti, node, req.sid, g.value.sub, s.now())) {
+            const d: core.approval.Decision = switch (try s.db.terminalUse(req.user, node, req.sid, s.now())) {
                 .allowed => .allow,
                 .denied => |why| .{ .deny = why },
             };
@@ -729,7 +712,7 @@ pub const Service = struct {
         };
         // Record the session from its first byte
         if (decision == .allow) s.recorder.open(req.sid, s.now());
-        const tok = try core.approval.issue(a, s.cfg.issuer, req, g.value.sub, jti, decision, s.now());
+        const tok = try core.approval.issue(a, s.cfg.issuer, req, decision, s.now());
         try s.reply(m, tok);
         switch (decision) {
             .allow => log.info("session {s} on {s} approved", .{ req.sid, node }),

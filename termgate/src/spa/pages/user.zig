@@ -25,15 +25,14 @@ const RoleRef = struct { id: i64, name: []const u8 };
 const Terminal = struct {
     kind: []const u8 = "human",
     user_key: ?[]const u8 = null,
-    nodes: []const u8 = "",
     max_uses: ?i64 = null,
-    grant_exp: ?i64 = null,
+    expires: ?i64 = null,
     revoked: bool = false,
     created: i64 = 0,
     token_expires: ?i64 = null,
-    uses: ?i64 = null,
+    uses: i64 = 0,
 };
-const User = struct { id: i64, name: []const u8, superuser: bool = false, disabled: bool = false, second_step: bool = false, created: i64 = 0, roles: []const RoleRef = &.{}, terminal: ?Terminal = null };
+const User = struct { id: i64, name: []const u8, superuser: bool = false, disabled: bool = false, second_step: bool = false, created: i64 = 0, nodes: []const u8 = "", roles: []const RoleRef = &.{}, terminal: ?Terminal = null };
 const Role = struct { id: i64, name: []const u8, description: []const u8 = "", user_count: i64 = 0 };
 
 const UserPage = struct { users: []const User = &.{}, total: i64 = 0, page: i64 = 1, pages: i64 = 1 };
@@ -310,7 +309,7 @@ pub fn display(query: []const u8) void {
     b.raw("</td></tr><tr><th>Roles:</th><td>");
     if (u.superuser) content.label(&b, "primary", "superuser");
     for (u.roles, 0..) |r, i| b.add("{s}{f}", .{ if (i > 0 or u.superuser) ", " else " ", app.esc(r.name) });
-    b.raw("</td></tr><tr><th>Terminal:</th><td>");
+    b.add("</td></tr><tr><th>Nodes:</th><td>{f}</td></tr><tr><th>Terminal:</th><td>", .{app.esc(if (u.nodes.len > 0) u.nodes else "-")});
     terminalLabel(&b, u.terminal);
     b.add("</td></tr><tr><th>Added:</th><td>{s}</td></tr></tbody></table>", .{content.dateTime(u.created)});
     content.contentEnd(&b);
@@ -324,10 +323,10 @@ pub fn update(query: []const u8) void {
     begin();
     edit_id = readUserId(query);
     const u = userById(edit_id) orelse return;
-    renderUpdate(u, u.name, u.disabled);
+    renderUpdate(u, u.name, u.disabled, u.nodes);
 }
 
-fn renderUpdate(u: User, name: []const u8, disabled: bool) void {
+fn renderUpdate(u: User, name: []const u8, disabled: bool, nodes: []const u8) void {
     const own = std.mem.eql(u8, u.name, state.user.?.name);
     var b: app.Buf = .{};
     recordHeader(&b, u, .edit, "Edit");
@@ -336,6 +335,7 @@ fn renderUpdate(u: User, name: []const u8, disabled: bool) void {
     content.field(&b, "user-name-input", "Name:", name, .{ .required = true, .max = 32, .help = "Lowercase letters, digits, _ . -; starts with a letter." });
     // Nobody blocks themselves
     if (!own) content.checkbox(&b, "user-blocked-input", "Blocked: cannot sign in", disabled);
+    content.field(&b, "user-nodes-input", "Nodes:", nodes, .{ .max = 255, .help = "The nodes this user may reach with tgterm: names or patterns, comma separated: ist_*, pump?? (* any, ? one character). Empty: none." });
     b.add("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userUpdate\" class=\"button button-primary button-sm\">Submit</button> <a href=\"{s}\" class=\"button button-default button-sm\">Cancel</a></div></div>", .{userUrl("#/user/display", u.id)});
     b.raw("</form>");
     content.contentEnd(&b);
@@ -345,8 +345,11 @@ fn renderUpdate(u: User, name: []const u8, disabled: bool) void {
 pub fn submitUpdate(f: Form) void {
     const name = f.trimmed("user-name-input");
     const blocked = f.checked("user-blocked-input");
-    _ = fetch.post("user/update", .{ .id = edit_id, .name = name, .disabled = blocked }) orelse return;
-    if (fetch.refused()) return renderUpdate(userById(edit_id) orelse return, name, blocked);
+    // "ist_*, pump??": the patterns without spaces
+    var nodes: std.ArrayList(u8) = .empty;
+    for (f.trimmed("user-nodes-input")) |ch| if (ch != ' ') nodes.append(app.arena(), ch) catch {};
+    _ = fetch.post("user/update", .{ .id = edit_id, .name = name, .disabled = blocked, .nodes = nodes.items }) orelse return;
+    if (fetch.refused()) return renderUpdate(userById(edit_id) orelse return, name, blocked, nodes.items);
     // The name in the menu may be this user's
     login.reload();
     state.say("success", "Record has been changed.");
@@ -520,22 +523,22 @@ pub fn terminal(query: []const u8) void {
     renderTerminal(.{});
 }
 
-const Invite = struct { nodes: []const u8 = "", bot: bool = false, uses: []const u8 = "", days: []const u8 = "" };
+const Invite = struct { bot: bool = false, uses: []const u8 = "", days: []const u8 = "" };
 
 fn renderTerminal(form: Invite) void {
     const u = userById(edit_id) orelse return;
     var b: app.Buf = .{};
     recordHeader(&b, u, .terminal, "Terminal");
     content.contentStart(&b);
-    b.raw("<p>Terminal access: this user connects to nodes with tgterm, like ssh. It also needs a role with the right terminal:connect (such as terminal_user).</p>");
+    b.raw("<p>Terminal access: this user connects with tgterm, like ssh, to its nodes (Edit). It also needs a role with the right terminal:connect (such as terminal_user).</p>");
     if (u.terminal) |t| {
         b.raw("<table><tbody><tr><th class=\"fixed-middle\">State:</th><td>");
         terminalLabel(&b, t);
-        b.add("</td></tr><tr><th>Nodes:</th><td>{f}</td></tr>", .{app.esc(t.nodes)});
-        b.add("<tr><th>Sessions:</th><td>{d} used", .{t.uses orelse 0});
+        b.add("</td></tr><tr><th>Nodes:</th><td>{f}</td></tr>", .{app.esc(if (u.nodes.len > 0) u.nodes else "- (set them with Edit)")});
+        b.add("<tr><th>Sessions:</th><td>{d} used", .{t.uses});
         if (t.max_uses) |m| b.add(" of {d}", .{m});
         b.raw("</td></tr>");
-        if (t.grant_exp) |e| b.add("<tr><th>Until:</th><td>{s} UTC</td></tr>", .{content.dateTime(e)});
+        if (t.expires) |e| b.add("<tr><th>Until:</th><td>{s} UTC</td></tr>", .{content.dateTime(e)});
         if (t.user_key) |k| b.add("<tr><th>Key:</th><td><small>{f}</small></td></tr>", .{app.esc(k)});
         b.raw("</tbody></table>");
     } else b.raw("<p>No terminal access given yet.</p>");
@@ -549,7 +552,6 @@ fn renderTerminal(form: Invite) void {
     b.raw("<div class=\"row row-header\"><div class=\"col\"><div class=\"page-title\"><h3>Give terminal access</h3></div></div></div>");
     content.contentStart(&b);
     b.raw("<form>");
-    content.field(&b, "term-nodes-input", "Nodes:", form.nodes, .{ .required = true, .max = 255, .help = "Node names or patterns, comma separated: ist_*, pump?? (* any, ? one character)." });
     content.field(&b, "term-uses-input", "Sessions:", form.uses, .{ .max = 6, .help = "How many sessions; empty: no limit (then give days)." });
     content.field(&b, "term-days-input", "Days:", form.days, .{ .max = 4, .help = "Valid for this many days; empty: no end (then give sessions)." });
     content.checkbox(&b, "term-bot-input", "A bot (a program)", form.bot);
@@ -560,7 +562,7 @@ fn renderTerminal(form: Invite) void {
 }
 
 pub fn submitTerminalInvite(f: Form) void {
-    const form: Invite = .{ .nodes = f.trimmed("term-nodes-input"), .bot = f.checked("term-bot-input"), .uses = f.trimmed("term-uses-input"), .days = f.trimmed("term-days-input") };
+    const form: Invite = .{ .bot = f.checked("term-bot-input"), .uses = f.trimmed("term-uses-input"), .days = f.trimmed("term-days-input") };
     const number = struct {
         fn get(text: []const u8) error{Invalid}!?u32 {
             if (text.len == 0) return null;
@@ -576,13 +578,7 @@ pub fn submitTerminalInvite(f: Form) void {
         state.say("warning", "Days is a whole number above 0, or empty.");
         return renderTerminal(form);
     };
-    var nodes: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, form.nodes, ',');
-    while (it.next()) |p| {
-        const t = std.mem.trim(u8, p, " ");
-        if (t.len > 0) nodes.append(app.arena(), t) catch {};
-    }
-    const answer = fetch.post("user/terminal_invite", .{ .id = edit_id, .nodes = nodes.items, .bot = form.bot, .uses = uses, .days = days }) orelse return;
+    const answer = fetch.post("user/terminal_invite", .{ .id = edit_id, .bot = form.bot, .uses = uses, .days = days }) orelse return;
     if (fetch.refused()) {
         state.keepMessages();
         return renderTerminal(form);

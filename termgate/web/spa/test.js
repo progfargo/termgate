@@ -140,10 +140,16 @@
     await click("[data-action=configUpdate]");
     await wait("the settings saved", said("Record has been changed."));
 
+    step = "the user's nodes";
+    await go("#/user/update?userId=" + veli);
+    await wait("the edit page", () => $("#user-nodes-input"));
+    fill("user-nodes-input", "web_*");
+    await click("[data-action=userUpdate]");
+    await wait("the nodes saved", said("Record has been changed."));
+
     step = "terminal access";
     await go("#/user/terminal?userId=" + veli);
-    await wait("the terminal page", () => $("#term-nodes-input"));
-    fill("term-nodes-input", "web_*");
+    await wait("the terminal page", () => $("#term-uses-input"));
     fill("term-uses-input", "2");
     await click("[data-action=userTerminalInvite]");
     await wait("the invitation", () => text("pre").startsWith("tgterm --invite tg1-"));

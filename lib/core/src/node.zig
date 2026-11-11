@@ -28,8 +28,8 @@ pub fn isValidName(name: []const u8) bool {
     return true;
 }
 
-/// A node name pattern in a grant: the name characters plus the wildcards
-/// "*" (any run) and "?" (one character).
+/// A node name pattern (a user's nodes, termgate's user record): the name
+/// characters plus the wildcards "*" (any run) and "?" (one character).
 pub fn isValidPattern(pattern: []const u8) bool {
     if (pattern.len == 0 or pattern.len > max_len) return false;
     for (pattern) |c| {
@@ -37,6 +37,33 @@ pub fn isValidPattern(pattern: []const u8) bool {
         if (!ok) return false;
     }
     return true;
+}
+
+/// Glob match of a node name against a pattern: * matches any run of
+/// characters (also empty), ? exactly one. No character classes or escapes.
+pub fn globMatch(pattern: []const u8, name: []const u8) bool {
+    var p: usize = 0;
+    var n: usize = 0;
+    // Position after the last * and the name position it was tried at
+    var star: ?usize = null;
+    var star_n: usize = 0;
+    while (n < name.len) {
+        if (p < pattern.len and (pattern[p] == '?' or pattern[p] == name[n])) {
+            p += 1;
+            n += 1;
+        } else if (p < pattern.len and pattern[p] == '*') {
+            star = p + 1;
+            star_n = n;
+            p += 1;
+        } else if (star) |s| {
+            // Let the last * swallow one more character
+            star_n += 1;
+            n = star_n;
+            p = s;
+        } else return false;
+    }
+    while (p < pattern.len and pattern[p] == '*') p += 1;
+    return p == pattern.len;
 }
 
 test "valid and invalid names" {
@@ -56,4 +83,22 @@ test "valid and invalid patterns" {
         try testing.expect(isValidPattern(p));
     for ([_][]const u8{ "", "ist-*", "IST_*", "ist.*", "ist *", "ist>" }) |p|
         try testing.expect(!isValidPattern(p));
+}
+
+test "glob matching of node names" {
+    const testing = std.testing;
+    try testing.expect(globMatch("gw17", "gw17"));
+    try testing.expect(!globMatch("gw17", "gw170"));
+    try testing.expect(globMatch("*", "anything"));
+    try testing.expect(globMatch("*", ""));
+    try testing.expect(globMatch("gw_*", "gw_"));
+    try testing.expect(globMatch("gw_*", "gw_ist_01"));
+    try testing.expect(!globMatch("gw_*", "pump_01"));
+    try testing.expect(globMatch("pump??", "pump07"));
+    try testing.expect(!globMatch("pump??", "pump7"));
+    try testing.expect(globMatch("*_gw", "ist_kadikoy_gw"));
+    try testing.expect(globMatch("ist_*_*_gw", "ist_a_b_gw"));
+    try testing.expect(!globMatch("ist_*_*_gw", "ist_a_gw"));
+    try testing.expect(globMatch("a*b*c", "aXXbYYbZc"));
+    try testing.expect(!globMatch("a*b*c", "aXXbYY"));
 }

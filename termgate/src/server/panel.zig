@@ -257,7 +257,7 @@ const node_key_lifetime_s = 3600;
 const invitation_lifetime_s = 7 * 86400;
 
 /// nodes.create {name, description}, nodes.newKey {id}, terminal.invite
-/// {id (the user), bot, nodes: [...], uses, days}: a node key or
+/// {id (the user), bot, uses, days}: a node key or
 /// an invitation, made here: a random token, of which only the hash is
 /// stored; the text (tg1-<relay>-<CA fingerprint>-<token>) is answered
 /// once, to be handed over.
@@ -269,7 +269,6 @@ fn keyCall(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8, 
         name: []const u8 = "",
         description: []const u8 = "",
         bot: bool = false,
-        nodes: []const []const u8 = &.{},
         uses: ?u32 = null,
         days: ?u32 = null,
     };
@@ -302,9 +301,8 @@ fn keyCall(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8, 
     if (req.uses == null and req.days == null) return .{ .body = "{\"err\":\"InvalidSpec\"}" };
     db.terminalInvite(req.id, .{
         .kind = if (req.bot) .bot else .human,
-        .nodes = std.mem.join(a, ",", req.nodes) catch return error.OutOfMemory,
         .max_uses = req.uses,
-        .grant_exp = if (req.days) |d| now + @as(i64, d) * 86400 else null,
+        .expires = if (req.days) |d| now + @as(i64, d) * 86400 else null,
     }, &th, now + invitation_lifetime_s, now) catch |e| return answer.dbErr(a, e);
     return answer.ok(a, req.id, text);
 }
@@ -394,7 +392,8 @@ test "node keys and invitations are made on the server" {
     // Terminal access for a user: needs uses, days or both
     const ali = try db.userCreate("ali", false, "!", 1000);
     try db.userGrant(ali, (try db.roleList(a))[2].id);
-    const ali_body = try std.fmt.allocPrint(a, "{{\"id\":{d},\"nodes\":[\"gw*\",\"pump?\"]", .{ali});
+    try db.userSetNodes(ali, "gw*,pump?");
+    const ali_body = try std.fmt.allocPrint(a, "{{\"id\":{d}", .{ali});
     try testing.expectEqualStrings("{\"err\":\"InvalidSpec\"}", (try call(&p, a, "terminal.invite", try std.mem.concat(a, u8, &.{ ali_body, "}" }), admin, 1000)).?.body);
     const inv = try std.json.parseFromSliceLeaky(Answer, a, (try call(&p, a, "terminal.invite", try std.mem.concat(a, u8, &.{ ali_body, ",\"uses\":2}" }), admin, 1000)).?.body, .{});
     const t = (try db.terminalByToken(a, &dbm.tokenHash((try core.code.parse(inv.ok.code)).token), 1000)).?;

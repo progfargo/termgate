@@ -20,7 +20,7 @@ pub const Config = struct {
     relay_port: u16 = 4222,
     /// PEM of termgate's CA; empty = plain TCP (tests only)
     ca_pem: []const u8 = "",
-    /// termgate's issuer key ("A..."): grants and approvals must be signed by it
+    /// termgate's issuer key ("A..."): approvals must be signed by it
     issuer: []const u8,
 };
 

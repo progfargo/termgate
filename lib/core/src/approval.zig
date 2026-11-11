@@ -1,13 +1,14 @@
 //! Session approvals: termgate's answer to "may this session open?".
 //!
 //! After verifying a session request (session.zig), tgnode sends an approval
-//! request to authorize.<node>: the grant, the node, the request's nonce and
-//! the session id it chose. termgate checks revocation and max_uses, counts
-//! the use, records the start and replies with an approval: a JWT signed by the
-//! account key whose nats section has type "approval" and echoes node, nonce,
-//! sid and the grant's jti. tgnode accepts only an approval that is signed by
-//! a trusted account key and matches its own request, so a compromised relay
-//! cannot fake or replay one.
+//! request to authorize.<node>: the user's key, the node, the request's nonce
+//! and the session id it chose. termgate decides from its database (the
+//! user's terminal access, its node patterns, the invitation's uses and end),
+//! counts the use, records the start and replies with an approval: a JWT
+//! signed by the account key whose nats section has type "approval" and
+//! echoes user, node, nonce and sid. tgnode accepts only an approval that is
+//! signed by a trusted account key and matches its own request, so a
+//! compromised relay cannot fake or replay one.
 //!
 //! End-to-end encryption (e2e.zig): the request carries both sides' session
 //! public keys and the session keys sealed to termgate; the approval echoes
@@ -24,7 +25,8 @@ pub const lifetime: i64 = 60;
 
 /// Body of the request on authorize.<node> (JSON).
 pub const Request = struct {
-    grant: []const u8,
+    /// The user's public key ("U..."), as the session request proved
+    user: []const u8,
     node: []const u8,
     nonce: []const u8,
     sid: []const u8,
@@ -43,8 +45,6 @@ pub const ApprovalNats = struct {
     sid: []const u8,
     kx_user: []const u8,
     kx_node: []const u8,
-    /// jti of the approved grant
-    grant: []const u8,
     ok: bool,
     /// Why the session was refused (shown to the user)
     reason: ?[]const u8 = null,
@@ -57,12 +57,11 @@ pub const Decision = union(enum) {
     deny: []const u8,
 };
 
-/// Signs an approval (termgate side) for a request whose grant termgate has
-/// already verified. `user` is the grant's sub, `grant_jti` its jti.
-pub fn issue(gpa: std.mem.Allocator, signer: nkeys.KeyPair, req: Request, user: []const u8, grant_jti: []const u8, decision: Decision, now: i64) ![]u8 {
+/// Signs an approval (termgate side): termgate's decision on the request.
+pub fn issue(gpa: std.mem.Allocator, signer: nkeys.KeyPair, req: Request, decision: Decision, now: i64) ![]u8 {
     if (signer.prefix != .account) return error.InvalidSigner;
     return jwt.encode(gpa, ApprovalClaims, .{
-        .sub = user,
+        .sub = req.user,
         .exp = now + lifetime,
         .nats = .{
             .node = req.node,
@@ -70,7 +69,6 @@ pub fn issue(gpa: std.mem.Allocator, signer: nkeys.KeyPair, req: Request, user: 
             .sid = req.sid,
             .kx_user = req.kx_user,
             .kx_node = req.kx_node,
-            .grant = grant_jti,
             .ok = decision == .allow,
             .reason = switch (decision) {
                 .allow => null,
@@ -85,9 +83,6 @@ pub const Expect = struct {
     issuers: []const []const u8,
     /// The request this approval must answer
     request: Request,
-    /// The grant's user and jti (from the verified grant)
-    user: []const u8,
-    grant_jti: []const u8,
     now: i64,
     leeway: i64 = 5 * 60,
 };
@@ -126,13 +121,12 @@ fn decodeChecked(gpa: std.mem.Allocator, token: []const u8, expect: Expect) !std
         if (std.mem.eql(u8, i, c.iss)) break;
     } else return error.UntrustedIssuer;
     const r = expect.request;
-    if (!std.mem.eql(u8, c.sub, expect.user) or
+    if (!std.mem.eql(u8, c.sub, r.user) or
         !std.mem.eql(u8, c.nats.node, r.node) or
         !std.mem.eql(u8, c.nats.nonce, r.nonce) or
         !std.mem.eql(u8, c.nats.sid, r.sid) or
         !std.mem.eql(u8, c.nats.kx_user, r.kx_user) or
-        !std.mem.eql(u8, c.nats.kx_node, r.kx_node) or
-        !std.mem.eql(u8, c.nats.grant, expect.grant_jti))
+        !std.mem.eql(u8, c.nats.kx_node, r.kx_node))
         return error.Mismatch;
     return p;
 }
@@ -140,10 +134,9 @@ fn decodeChecked(gpa: std.mem.Allocator, token: []const u8, expect: Expect) !std
 /// What tgterm expects of the approval tgnode passes on.
 pub const UserExpect = struct {
     issuers: []const []const u8,
-    /// tgterm's own key, the grant's jti, the node it asked, the nonce and
-    /// session public key it sent
+    /// tgterm's own key, the node it asked, the nonce and session public
+    /// key it sent
     user: []const u8,
-    grant_jti: []const u8,
     node: []const u8,
     nonce: []const u8,
     kx_user: []const u8,
@@ -171,8 +164,7 @@ pub fn verifyForUser(gpa: std.mem.Allocator, token: []const u8, expect: UserExpe
     if (!std.mem.eql(u8, c.sub, expect.user) or
         !std.mem.eql(u8, c.nats.node, expect.node) or
         !std.mem.eql(u8, c.nats.nonce, expect.nonce) or
-        !std.mem.eql(u8, c.nats.kx_user, expect.kx_user) or
-        !std.mem.eql(u8, c.nats.grant, expect.grant_jti))
+        !std.mem.eql(u8, c.nats.kx_user, expect.kx_user))
         return error.Mismatch;
     if (!c.nats.ok) return error.Denied;
     const sid = try gpa.dupe(u8, c.nats.sid);
@@ -186,7 +178,7 @@ pub fn verifyForUser(gpa: std.mem.Allocator, token: []const u8, expect: UserExpe
 const testing = std.testing;
 const t0: i64 = 1794289057;
 
-const test_req: Request = .{ .grant = "<grant jwt>", .node = "gw17", .nonce = "n0nce", .sid = "s1", .kx_user = "KXU", .kx_node = "KXN" };
+const test_req: Request = .{ .user = "UUSER", .node = "gw17", .nonce = "n0nce", .sid = "s1", .kx_user = "KXU", .kx_node = "KXN" };
 
 fn fixture() !struct { account: nkeys.KeyPair, account_pub: [nkeys.public_len]u8 } {
     const account = try nkeys.KeyPair.fromRawSeed(.account, @splat(1));
@@ -194,13 +186,13 @@ fn fixture() !struct { account: nkeys.KeyPair, account_pub: [nkeys.public_len]u8
 }
 
 fn expectFor(issuers: []const []const u8, r: Request) Expect {
-    return .{ .issuers = issuers, .request = r, .user = "UUSER", .grant_jti = "JTI1", .now = t0 };
+    return .{ .issuers = issuers, .request = r, .now = t0 };
 }
 
 test "allowed approval verifies for its own request only" {
     const a = testing.allocator;
     const f = try fixture();
-    const tok = try issue(a, f.account, test_req, "UUSER", "JTI1", .allow, t0);
+    const tok = try issue(a, f.account, test_req, .allow, t0);
     defer a.free(tok);
     const issuers: []const []const u8 = &.{&f.account_pub};
 
@@ -221,7 +213,7 @@ test "allowed approval verifies for its own request only" {
     try testing.expectError(error.Mismatch, verify(a, tok, expectFor(issuers, other)));
 
     // tgterm's side: the node's key comes from the signed approval
-    const ue: UserExpect = .{ .issuers = issuers, .user = "UUSER", .grant_jti = "JTI1", .node = "gw17", .nonce = "n0nce", .kx_user = "KXU", .now = t0 };
+    const ue: UserExpect = .{ .issuers = issuers, .user = "UUSER", .node = "gw17", .nonce = "n0nce", .kx_user = "KXU", .now = t0 };
     const fu = try verifyForUser(a, tok, ue);
     defer a.free(fu.sid);
     defer a.free(fu.kx_node);
@@ -242,7 +234,7 @@ test "allowed approval verifies for its own request only" {
 test "denied approval carries a reason" {
     const a = testing.allocator;
     const f = try fixture();
-    const tok = try issue(a, f.account, test_req, "UUSER", "JTI1", .{ .deny = "no uses left" }, t0);
+    const tok = try issue(a, f.account, test_req, .{ .deny = "no uses left" }, t0);
     defer a.free(tok);
     const issuers: []const []const u8 = &.{&f.account_pub};
     try testing.expectError(error.Denied, verify(a, tok, expectFor(issuers, test_req)));
@@ -255,21 +247,10 @@ test "approval from an untrusted key is rejected" {
     const a = testing.allocator;
     const f = try fixture();
     const stranger = try nkeys.KeyPair.fromRawSeed(.account, @splat(7));
-    const tok = try issue(a, stranger, test_req, "UUSER", "JTI1", .allow, t0);
+    const tok = try issue(a, stranger, test_req, .allow, t0);
     defer a.free(tok);
     try testing.expectError(error.UntrustedIssuer, verify(a, tok, expectFor(&.{&f.account_pub}, test_req)));
 
     const user = try nkeys.KeyPair.fromRawSeed(.user, @splat(8));
-    try testing.expectError(error.InvalidSigner, issue(a, user, test_req, "UUSER", "JTI1", .allow, t0));
-}
-
-test "a grant is not an approval" {
-    const a = testing.allocator;
-    const f = try fixture();
-    const grant = @import("grant.zig");
-    const user = try nkeys.KeyPair.fromRawSeed(.user, @splat(2));
-    const upub = user.publicKey().encode();
-    const g = try grant.issue(a, f.account, .{ .user = &upub, .nodes = &.{"gw17"}, .exp = t0 + 60 }, t0);
-    defer a.free(g);
-    try testing.expectError(error.InvalidToken, verify(a, g, expectFor(&.{&f.account_pub}, test_req)));
+    try testing.expectError(error.InvalidSigner, issue(a, user, test_req, .allow, t0));
 }

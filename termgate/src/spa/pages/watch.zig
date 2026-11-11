@@ -41,8 +41,7 @@ pub fn render(query: []const u8) void {
     content.commandStart(&b);
     b.raw("<a href=\"#/session\" class=\"button button-default button-sm\">Back</a>");
     if (state.can("session", "end")) b.add("<button type=\"button\" data-action=\"sessionEnd\" id=\"watch-end\" data-sid=\"{s}\" data-node=\"{f}\" data-key=\"{f}\" class=\"button button-error button-sm\" title=\"Ends the user's session on the node; leaving this page only stops watching.\">End session</button>", .{ sid, app.esc(node), app.esc(key) });
-    b.raw("<span class=\"label label-default\" id=\"watch-state\">connecting</span>");
-    content.commandEnd(&b);
+    content.commandEndNote(&b, "<span id=\"watch-state\">connecting</span>", .{});
     b.raw("<div class=\"row row-content\"><div class=\"col\"><div class=\"terminal\" id=\"watch-screen\"></div></div></div>");
     content.show(&b);
 

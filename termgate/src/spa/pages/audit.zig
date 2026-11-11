@@ -24,8 +24,7 @@ pub fn browse(query: []const u8) void {
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Audit", "" }});
     content.commandStart(&b);
-    b.add("<span class=\"label label-default\">{d} entries{s}</span>", .{ page.total, if (key.len > 0) " found" else "" });
-    content.commandEnd(&b);
+    content.commandEndNote(&b, "{d} entries{s}", .{ page.total, if (key.len > 0) " found" else "" });
     content.contentStart(&b);
     b.raw("<table><thead><tr><th>When</th><th>Who</th><th>What</th><th>About</th><th>Result</th></tr></thead><tbody>");
     if (page.rows.len == 0) b.raw("<tr><td colspan=\"5\">Empty list.</td></tr>");

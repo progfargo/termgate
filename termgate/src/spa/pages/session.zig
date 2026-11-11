@@ -71,8 +71,7 @@ pub fn browse(query: []const u8) void {
     content.header(&b, &.{.{ "Sessions", "" }});
     content.commandStart(&b);
     b.raw("<a href=\"#/session\" class=\"button button-default button-sm\" title=\"Read again.\"><i class=\"fas fa-rotate fa-fw\"></i></a>");
-    b.add("<span class=\"label label-default\">{d} open</span>", .{open.len});
-    content.commandEnd(&b);
+    content.commandEndNote(&b, "{d} open", .{open.len});
     content.contentStart(&b);
     table(&b, open, true);
     content.contentEnd(&b);

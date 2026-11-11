@@ -198,5 +198,7 @@ pub fn build(b: *std.Build) void {
         // The parts that do not need a browser
         const spa_tests = b.createModule(.{ .root_source_file = b.path("src/spa/app.zig"), .target = target, .optimize = optimize });
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = spa_tests })).step);
+        const tax_tests = b.createModule(.{ .root_source_file = b.path("src/spa/lib/tax.zig"), .target = target, .optimize = optimize });
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = tax_tests })).step);
     }
 }

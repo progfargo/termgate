@@ -29,6 +29,9 @@
     tg_answer_read(out) { new Uint8Array(zjs.memory.buffer, out, answer.length).set(answer); },
     tg_log(ptr, len) { console.log(zjs.loadString(ptr, len)); },
     tg_now() { return Date.now(); },
+    // A new frame (layout.zig): its header is watched (our earlier project's
+    // setupHeaderWatch)
+    tg_layout_ready() { setupHeaderWatch(); },
   };
 
   window.tg = {
@@ -93,9 +96,71 @@
     return data;
   }
 
+  // The left menu on a phone, its button moving along with it
+  function openSidebar() {
+    const m = document.getElementById("left-menu-div"), b = document.getElementById("left-menu-btn");
+    if (m) m.classList.add("left-menu-show");
+    if (b) b.classList.add("left-menu-button-move");
+  }
   function closeSidebar() {
-    const m = document.getElementById("left-menu-div");
+    const m = document.getElementById("left-menu-div"), b = document.getElementById("left-menu-btn");
     if (m) m.classList.remove("left-menu-show");
+    if (b) b.classList.remove("left-menu-button-move");
+  }
+  function toggleSidebar() {
+    const m = document.getElementById("left-menu-div");
+    if (m && m.classList.contains("left-menu-show")) closeSidebar(); else openSidebar();
+  }
+
+  // Light or dark, remembered by the browser
+  function toggleTheme() {
+    const root = document.documentElement;
+    const dark = root.classList.toggle("dark");
+    try { localStorage.setItem("theme", dark ? "dark" : "light"); } catch (e) {}
+  }
+  try { if (localStorage.getItem("theme") === "dark") document.documentElement.classList.add("dark"); } catch (e) {}
+
+  // The header on a narrow screen (our earlier project's checkHeaderLayout): when
+  // the top menu or the search box drops under the title, they hide
+  // behind a menu button; the menus and the page start under the header
+  function updateHeaderHeight() {
+    const header = document.querySelector("header");
+    if (!header) return;
+    const px = header.offsetHeight + "px";
+    for (const id of ["top-menu-btn", "left-menu-btn", "left-menu-div"]) {
+      const el = document.getElementById(id);
+      if (el) el.style.top = px;
+    }
+    const main = document.querySelector("main");
+    if (main) main.style.paddingTop = px;
+  }
+  function checkHeaderLayout() {
+    const title = document.querySelector(".site-title"), btn = document.getElementById("top-menu-btn"), header = document.querySelector("header");
+    if (!title || !btn || !header) return;
+    const bottom = title.offsetTop + title.offsetHeight;
+    const top = document.getElementById("top-menu"), search = document.getElementById("search");
+    const topDropped = top && top.offsetTop >= bottom;
+    const searchDropped = search && search.offsetTop >= bottom;
+    const dropped = topDropped || searchDropped;
+    if (top) top.style.marginTop = topDropped ? "1.456rem" : "";
+    if (search) {
+      search.style.marginTop = searchDropped ? "1.456rem" : "";
+      search.style.marginBottom = dropped ? "0.9rem" : "";
+    }
+    if (dropped) btn.style.display = "block";
+    else { btn.style.display = "none"; header.classList.remove("auto-height"); }
+    updateHeaderHeight();
+  }
+  function setupHeaderWatch() {
+    checkHeaderLayout();
+    const top = document.getElementById("top-menu");
+    if (top) new MutationObserver(checkHeaderLayout).observe(top, { childList: true, subtree: true });
+  }
+  window.addEventListener("resize", checkHeaderLayout);
+  function toggleMobileMenu() {
+    const header = document.querySelector("header");
+    if (header) header.classList.toggle("auto-height");
+    updateHeaderHeight();
   }
 
   document.addEventListener("click", e => {
@@ -122,10 +187,15 @@
     // The menu on a phone closes on a click elsewhere
     const menu = document.getElementById("left-menu-div");
     if (menu && menu.classList.contains("left-menu-show") && !t.closest("#left-menu-div") && !t.closest("#left-menu-btn")) closeSidebar();
+    // The top menu on a phone closes on a click elsewhere
+    const header = document.querySelector("header");
+    if (header && header.classList.contains("auto-height") && !t.closest("header")) { header.classList.remove("auto-height"); updateHeaderHeight(); }
     const btn = t.closest("[data-action]");
     if (!btn) return;
     e.preventDefault();
-    if (btn.dataset.action === "toggleSidebar") { menu.classList.toggle("left-menu-show"); return; }
+    if (btn.dataset.action === "toggleSidebar") { toggleSidebar(); return; }
+    if (btn.dataset.action === "toggleMobileMenu") { toggleMobileMenu(); return; }
+    if (btn.dataset.action === "toggleTheme") { toggleTheme(); return; }
     if (btn.dataset.wait) { waitFor(btn); return; }
     call(x.tg_action, btn.dataset.action, JSON.stringify(formData(btn)));
   });

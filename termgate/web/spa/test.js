@@ -154,7 +154,7 @@
     await wait("the users", titled("Users"));
     await click(`[data-action=userSelect][data-id='${veli}']`);
     await wait("acting as veli", () => text("#user-info").includes("Signed in as superuser"));
-    await click("[data-action=userUnselect]");
+    await click("a.unselect-user");
     await wait("back to myself", () => !text("#user-info").includes("Signed in as"));
 
     step = "last admin";
@@ -163,7 +163,7 @@
     await wait("the refusal", said("The last admin cannot be deleted."));
 
     step = "sign out";
-    await click("[data-action=logout]");
+    await click("a[href='#/logout']");
     await wait("the sign-in page", () => $("#login-input"));
 
     document.title = "test: ok (scenario)";

@@ -26,6 +26,8 @@ const watch = @import("pages/watch.zig");
 
 const routes = [_]router.Route{
     .{ .path = "/login", .handler = login.render, .public = true },
+    .{ .path = "/logout", .handler = logoutRoute },
+    .{ .path = "/user/unselect", .handler = unselectRoute },
     .{ .path = "/user", .handler = user.browse },
     .{ .path = "/user/insert", .handler = user.insert },
     .{ .path = "/user/update", .handler = user.update },
@@ -95,6 +97,16 @@ fn search(f: Form) void {
     const path = f.str("path");
     const sep: []const u8 = if (std.mem.indexOfScalar(u8, path, '?') != null) "&" else "?";
     router.go(std.fmt.allocPrint(app.arena(), "{s}{s}key={s}&pn=1", .{ path, sep, app.urlEncode(f.trimmed("key")) }) catch return);
+}
+
+/// The top menu's Sign out and the user info's unselect are links (as
+/// our earlier project's #/logout and #/user/unselect)
+fn logoutRoute(_: []const u8) void {
+    login.logout(.{});
+}
+
+fn unselectRoute(_: []const u8) void {
+    user.unselect(.{});
 }
 
 /// The first page the user may open, in the menu's order.

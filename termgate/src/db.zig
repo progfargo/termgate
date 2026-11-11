@@ -183,7 +183,6 @@ pub const Db = struct {
         try db.exec(
             \\CREATE TABLE IF NOT EXISTS terminal (
             \\    userId INTEGER PRIMARY KEY REFERENCES user(userId) ON DELETE CASCADE,
-            \\    kind TEXT NOT NULL,
             \\    userKey TEXT UNIQUE,
             \\    accessKeyHash TEXT UNIQUE,
             \\    accessKeyExpires INTEGER,
@@ -1136,17 +1135,16 @@ pub const Db = struct {
         if (spec.max_uses) |m| if (m == 0) return error.InvalidSpec;
         if (!try db.hasId("select 1 from user where userId = ?", user_id)) return error.NotFound;
         var st = try Stmt.prepare(db,
-            \\insert or replace into terminal(userId, kind, userKey, accessKeyHash, accessKeyExpires, maxUses, expires, uses, revoked, created)
-            \\values(?, ?, null, ?, ?, ?, ?, 0, 0, ?)
+            \\insert or replace into terminal(userId, userKey, accessKeyHash, accessKeyExpires, maxUses, expires, uses, revoked, created)
+            \\values(?, null, ?, ?, ?, ?, 0, 0, ?)
         );
         defer st.finalize();
         try st.bindInt(1, user_id);
-        try st.bindText(2, @tagName(spec.kind));
-        try st.bindText(3, key_hash);
-        try st.bindInt(4, key_expires);
-        try st.bindOptInt(5, if (spec.max_uses) |m| m else null);
-        try st.bindOptInt(6, spec.expires);
-        try st.bindInt(7, now);
+        try st.bindText(2, key_hash);
+        try st.bindInt(3, key_expires);
+        try st.bindOptInt(4, if (spec.max_uses) |m| m else null);
+        try st.bindOptInt(5, spec.expires);
+        try st.bindInt(6, now);
         st.done() catch |e| return db.mapUnique(e);
     }
 
@@ -1412,7 +1410,7 @@ pub const Db = struct {
     }
 
     const session_select = "select sid, node, userKey, userName, started, ended, exitStatus from session";
-    const terminal_select = "select t.userId, u.name, t.kind, t.userKey, u.nodes, t.maxUses, t.expires, t.revoked, t.created, t.accessKeyExpires, t.uses " ++
+    const terminal_select = "select t.userId, u.name, t.userKey, u.nodes, t.maxUses, t.expires, t.revoked, t.created, t.accessKeyExpires, t.uses " ++
         "from terminal t join user u on u.userId = t.userId";
 
     const node_select = "select nodeId, name, description, state, hardwareKey, requestKey, status, created, lastSeen, nodeKeyExpires, online from node";
@@ -1500,15 +1498,14 @@ const Stmt = struct {
         return .{
             .id = st.int(0),
             .name = try st.text(a, 1),
-            .kind = std.meta.stringToEnum(types.TerminalKind, st.rawText(2)) orelse return error.SqliteError,
-            .user_key = try st.optText(a, 3),
-            .nodes = try st.text(a, 4),
-            .max_uses = st.optInt(5),
-            .expires = st.optInt(6),
-            .revoked = st.int(7) != 0,
-            .created = st.int(8),
-            .access_key_expires = st.optInt(9),
-            .uses = st.int(10),
+            .user_key = try st.optText(a, 2),
+            .nodes = try st.text(a, 3),
+            .max_uses = st.optInt(4),
+            .expires = st.optInt(5),
+            .revoked = st.int(6) != 0,
+            .created = st.int(7),
+            .access_key_expires = st.optInt(8),
+            .uses = st.int(9),
         };
     }
 
@@ -1726,7 +1723,7 @@ test "terminal access: expiry, revocation, and the right to connect" {
     const th = tokenHash("INV2");
     const id = try testTerminalUser(&db, "bot1");
     try db.userSetNodes(id, "*");
-    try db.terminalNewAccessKey(id, .{ .kind = .bot, .expires = t0 + 60 }, &th, t0 + 10, t0);
+    try db.terminalNewAccessKey(id, .{ .expires = t0 + 60 }, &th, t0 + 10, t0);
     // An access key that is not used in time expires
     try testing.expect((try db.terminalByAccessKey(a, &th, t0 + 10)) == null);
     try db.terminalUseAccessKey(id, "UBOT");

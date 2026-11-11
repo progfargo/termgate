@@ -22,7 +22,7 @@ const update: Action = .{ .name = "update", .title = "Update" };
 const delete: Action = .{ .name = "delete", .title = "Delete" };
 
 pub const modules = [_]Module{
-    // Signing in to this panel; a user without it (a terminal user, a bot)
+    // Signing in to this panel; a user without it (a terminal user only)
     // cannot
     .{ .name = "panel", .title = "Panel", .actions = &.{.{ .name = "login", .title = "Sign in" }} },
     .{ .name = "node", .title = "Nodes", .actions = &.{ browse, insert, update, delete } },

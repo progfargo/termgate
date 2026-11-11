@@ -257,7 +257,7 @@ const node_key_lifetime_s = 3600;
 const access_key_lifetime_s = 7 * 86400;
 
 /// nodes.create {name, description}, nodes.newKey {id}, terminal.accessKey
-/// {id (the user), bot, uses, days}: a node key or
+/// {id (the user), uses, days}: a node key or
 /// an access key, made here: a random token, of which only the hash is
 /// stored; the text (tg1-<relay>-<CA fingerprint>-<token>) is answered
 /// once, to be handed over.
@@ -268,7 +268,6 @@ fn keyCall(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8, 
         id: i64 = 0,
         name: []const u8 = "",
         description: []const u8 = "",
-        bot: bool = false,
         uses: ?u32 = null,
         days: ?u32 = null,
     };
@@ -300,7 +299,6 @@ fn keyCall(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8, 
     }
     if (req.uses == null and req.days == null) return .{ .body = "{\"err\":\"InvalidSpec\"}" };
     db.terminalNewAccessKey(req.id, .{
-        .kind = if (req.bot) .bot else .human,
         .max_uses = req.uses,
         .expires = if (req.days) |d| now + @as(i64, d) * 86400 else null,
     }, &th, now + access_key_lifetime_s, now) catch |e| return answer.dbErr(a, e);

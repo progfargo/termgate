@@ -25,7 +25,6 @@ pub const Terminal = struct {
     id: i64,
     /// The user's name
     name: []const u8,
-    kind: TerminalKind,
     /// Set once the access key is used
     user_key: ?[]const u8,
     /// The user's node patterns, comma separated (user.nodes)
@@ -164,13 +163,9 @@ pub const Action = struct {
 pub const NodeError = error{ InvalidName, Duplicate, NotFound, WrongState } || Error;
 pub const TerminalError = error{ InvalidSpec, NotFound, Duplicate } || Error;
 
-/// A person or a program (a bot) using tgterm.
-pub const TerminalKind = enum { human, bot };
-
 /// An access key's limits: how many sessions and/or until when. Which
 /// nodes is the user's (user.nodes).
 pub const TerminalSpec = struct {
-    kind: TerminalKind = .human,
     max_uses: ?u32 = null,
     /// When the access ends; an access key needs this, max_uses or both
     expires: ?i64 = null,

@@ -205,8 +205,8 @@ fn login(auth: *Auth, a: std.mem.Allocator, body: []const u8, now: i64) !Reply {
         defer auth.lock.unlock(auth.io);
         try auth.db.userSetOwnPassword(acc.id, hash);
     }
-    // Signing in to the panel is a right (panel:login); a terminal user
-    // or a bot does not have it
+    // Signing in to the panel is a right (panel:login); a terminal-only
+    // user does not have it
     {
         auth.lock.lockUncancelable(auth.io);
         defer auth.lock.unlock(auth.io);

@@ -23,7 +23,6 @@ const Form = @import("../form.zig").Form;
 const RoleRef = struct { id: i64, name: []const u8 };
 /// A user's terminal access (tgterm)
 const Terminal = struct {
-    kind: []const u8 = "human",
     user_key: ?[]const u8 = null,
     max_uses: ?i64 = null,
     expires: ?i64 = null,
@@ -390,13 +389,14 @@ fn renderRoles() void {
     content.contentEnd(&b);
     // Giving one of the roles the user does not have yet
     if (state.can("user", "role_grant")) {
-        b.raw("<div class=\"row row-command\"><div class=\"col\"><form class=\"form-inline\"><div class=\"form-group\"><select id=\"user-role-select\" class=\"form-control\"><option value=\"0\">Select a role</option>");
+        // As our earlier project's: the select and the button side by side
+        b.raw("<div class=\"row row-command\"><div class=\"col\"><form><div class=\"button-group-fixed\"><select id=\"user-role-select\" class=\"form-control\"><option value=\"0\">Select a role</option>");
         for (all) |r| {
             var has = false;
             for (u.roles) |x| has = has or x.id == r.id;
             if (!has) b.add("<option value=\"{d}\">{f}</option>", .{ r.id, app.esc(r.name) });
         }
-        b.raw("</select></div> <button type=\"button\" data-action=\"userRoleGrant\" class=\"button button-primary button-sm\">Grant</button></form></div></div>");
+        b.raw("</select><button type=\"button\" data-action=\"userRoleGrant\" class=\"button button-primary button-sm\">Grant</button></div></form></div></div>");
     }
     show(&b);
 }
@@ -512,7 +512,7 @@ fn actingChanged(text: []const u8) void {
 fn terminalLabel(b: *app.Buf, t: ?Terminal) void {
     const x = t orelse return b.raw("-");
     if (x.revoked) return content.label(b, "error", "revoked");
-    if (x.user_key != null) return content.label(b, "success", if (std.mem.eql(u8, x.kind, "bot")) "active (bot)" else "active");
+    if (x.user_key != null) return content.label(b, "success", "active");
     if (x.access_key_expires) |e| if (e <= app.now()) return content.label(b, "warning", "key expired");
     content.label(b, "primary", "key not used yet");
 }
@@ -524,7 +524,7 @@ pub fn terminal(query: []const u8) void {
     renderTerminal(.{});
 }
 
-const KeyForm = struct { bot: bool = false, uses: []const u8 = "", days: []const u8 = "" };
+const KeyForm = struct { uses: []const u8 = "", days: []const u8 = "" };
 
 fn renderTerminal(form: KeyForm) void {
     const u = userById(edit_id) orelse return;
@@ -553,17 +553,17 @@ fn renderTerminal(form: KeyForm) void {
     b.raw("<div class=\"row row-header\"><div class=\"col\"><div class=\"page-title\"><h3>Give terminal access</h3></div></div></div>");
     content.contentStart(&b);
     b.raw("<form>");
-    content.field(&b, "term-uses-input", "Sessions:", form.uses, .{ .max = 6, .help = "How many sessions; empty: no limit (then give days)." });
-    content.field(&b, "term-days-input", "Days:", form.days, .{ .max = 4, .help = "Valid for this many days; empty: no end (then give sessions)." });
-    content.checkbox(&b, "term-bot-input", "A bot (a program)", form.bot);
-    b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userAccessKey\" class=\"button button-primary button-sm\">Make access key</button></div></div>");
+    content.field(&b, "term-uses-input", "Sessions:", form.uses, .{ .max = 6, .help = "Total number of sessions the key can open; empty: no limit." });
+    content.field(&b, "term-days-input", "Days:", form.days, .{ .max = 4, .help = "Valid lifetime (days) of the key; empty: no limit." });
+    b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userAccessKey\" class=\"button button-primary button-sm\">Make access key</button></div>");
+    b.raw("<span class=\"help-block\">Give sessions, days or both.</span></div>");
     b.raw("</form>");
     content.contentEnd(&b);
     content.show(&b);
 }
 
 pub fn submitAccessKey(f: Form) void {
-    const form: KeyForm = .{ .bot = f.checked("term-bot-input"), .uses = f.trimmed("term-uses-input"), .days = f.trimmed("term-days-input") };
+    const form: KeyForm = .{ .uses = f.trimmed("term-uses-input"), .days = f.trimmed("term-days-input") };
     const number = struct {
         fn get(text: []const u8) error{Invalid}!?u32 {
             if (text.len == 0) return null;
@@ -579,7 +579,7 @@ pub fn submitAccessKey(f: Form) void {
         state.say("warning", "Days is a whole number above 0, or empty.");
         return renderTerminal(form);
     };
-    const answer = fetch.post("user/access_key", .{ .id = edit_id, .bot = form.bot, .uses = uses, .days = days }) orelse return;
+    const answer = fetch.post("user/access_key", .{ .id = edit_id, .uses = uses, .days = days }) orelse return;
     if (fetch.refused()) {
         state.keepMessages();
         return renderTerminal(form);

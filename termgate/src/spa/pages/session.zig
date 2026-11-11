@@ -4,6 +4,7 @@
 //! (watch.zig).
 
 const std = @import("std");
+const vt = @import("vt");
 const app = @import("../app.zig");
 const dom = @import("../dom.zig");
 const state = @import("../state.zig");
@@ -181,6 +182,34 @@ fn unbase64(text: []const u8) []const u8 {
     return out;
 }
 
+/// Terminal bytes as the screen shows them (libghostty-vt): escape
+/// sequences applied, not printed. The screen is tall enough that nothing
+/// scrolls off; trailing blanks are dropped.
+fn screenText(bytes: []const u8) []const u8 {
+    if (bytes.len == 0) return "";
+    const rows = @min(std.mem.count(u8, bytes, "\n") + 2, 5000);
+    const screen = vt.Screen.create(app.gpa, std.Io.failing, 160, @intCast(rows)) catch return "";
+    defer screen.destroy();
+    screen.feed(bytes);
+    const text = screen.text(app.arena()) catch return "";
+    var out: app.Buf = .{};
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |line| {
+        out.raw(std.mem.trimEnd(u8, line, " "));
+        out.raw("\n");
+    }
+    return std.mem.trimEnd(u8, out.str(), "\n");
+}
+
+/// A typed line as it looked: a DEL (Backspace) deletes the character
+/// before the cursor.
+fn typedText(raw: []const u8) []const u8 {
+    const line = std.mem.trimEnd(u8, raw, "\r\n");
+    var b: app.Buf = .{};
+    for (line) |c| if (c == 0x7f) b.raw("\x08\x1b[P") else b.list.append(app.arena(), c) catch {};
+    return screenText(b.str());
+}
+
 pub fn log(query: []const u8) void {
     if (!state.can("session", "log")) return router.renderBadRequest();
     begin("session");
@@ -194,7 +223,7 @@ pub fn log(query: []const u8) void {
     content.contentStart(&b);
     if (cmds.len == 0) b.raw("<p>Nothing was typed in this session.</p>");
     for (cmds) |c| {
-        b.add("<div><p><small>{s}</small></p><pre><strong>{f}</strong>\n{f}</pre>", .{ content.dateTime(c.at), app.esc(std.mem.trimEnd(u8, unbase64(c.line), "\r\n")), app.esc(unbase64(c.output)) });
+        b.add("<div><p><small>{s}</small></p><pre><strong>{f}</strong>\n{f}</pre>", .{ content.dateTime(c.at), app.esc(typedText(unbase64(c.line))), app.esc(screenText(unbase64(c.output))) });
         if (c.output_chars > 0 and unbase64(c.output).len < c.output_chars) b.add("<p><small>{d} characters of output in all; the first are kept.</small></p>", .{c.output_chars});
         if (!c.intact) b.raw("<p><small>This entry could not be read (changed, or another key).</small></p>");
         b.raw("</div>");

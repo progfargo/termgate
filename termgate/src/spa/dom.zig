@@ -17,6 +17,7 @@ fn byId(id: []const u8) ?js.Object {
 
 /// The HTML inside the element `id`.
 pub fn setHtml(id: []const u8, html: []const u8) void {
+    if (app.waiting) return;
     const el = byId(id) orelse return;
     defer el.deinit();
     el.set("innerHTML", js.string(html)) catch {};
@@ -36,12 +37,14 @@ pub fn value(id: []const u8) []const u8 {
 }
 
 pub fn setValue(id: []const u8, text: []const u8) void {
+    if (app.waiting) return;
     const el = byId(id) orelse return;
     defer el.deinit();
     el.set("value", js.string(text)) catch {};
 }
 
 pub fn setDisabled(id: []const u8) void {
+    if (app.waiting) return;
     const el = byId(id) orelse return;
     defer el.deinit();
     el.set("disabled", true) catch {};
@@ -56,6 +59,7 @@ pub fn checked(id: []const u8) bool {
 /// The first text field of the page's content gets the focus (a page
 /// set as HTML does not follow `autofocus`).
 pub fn focusFirstField() void {
+    if (app.waiting) return;
     const tg = js.global.get(js.Object, "tg") catch return;
     defer tg.deinit();
     tg.call(void, "focusFirst", .{}) catch {};
@@ -63,18 +67,21 @@ pub fn focusFirstField() void {
 
 /// The messages marked auto-clear go after 5 seconds (web/spa/boot.js).
 pub fn autoClearMessages() void {
+    if (app.waiting) return;
     const tg = js.global.get(js.Object, "tg") catch return;
     defer tg.deinit();
     tg.call(void, "autoClear", .{}) catch {};
 }
 
 pub fn focus(id: []const u8) void {
+    if (app.waiting) return;
     const el = byId(id) orelse return;
     defer el.deinit();
     el.call(void, "focus", .{}) catch {};
 }
 
 pub fn addClass(id: []const u8, class: []const u8) void {
+    if (app.waiting) return;
     classList(id, "add", class);
 }
 
@@ -88,6 +95,7 @@ fn classList(id: []const u8, op: []const u8, class: []const u8) void {
 
 /// The id of the page's body (our earlier project's SetBodyId: page styles).
 pub fn setBodyId(id: []const u8) void {
+    if (app.waiting) return;
     const doc = document() orelse return;
     defer doc.deinit();
     const body = doc.get(js.Object, "body") catch return;
@@ -97,6 +105,7 @@ pub fn setBodyId(id: []const u8) void {
 
 /// Goes to `path` ("/user"): the hash changes and the page follows it.
 pub fn setHash(path: []const u8) void {
+    if (app.waiting) return;
     const loc = js.global.get(js.Object, "location") catch return;
     defer loc.deinit();
     const h = std.fmt.allocPrint(app.arena(), "#{s}", .{path}) catch return;
@@ -113,6 +122,7 @@ pub fn hash() []const u8 {
 
 /// Copies text to the clipboard (the page's own helper, web/spa/boot.js).
 pub fn copy(text: []const u8) void {
+    if (app.waiting) return;
     const tg = js.global.get(js.Object, "tg") catch return;
     defer tg.deinit();
     tg.call(void, "copy", .{js.string(text)}) catch {};

@@ -6,28 +6,29 @@
 // a phone) is done here directly.
 "use strict";
 (async () => {
-  const enc = new TextEncoder(), dec = new TextDecoder();
+  const enc = new TextEncoder();
   const zjs = new ZigJS();
   let x = null;
-  let answer = new Uint8Array(0);
   let clearTimer = 0;
 
   const env = {
-    // POST /api/<path>, JSON. The panel waits for the answer (a
-    // synchronous request); the session cookie goes along by itself.
-    tg_post(pathPtr, pathLen, bodyPtr, bodyLen) {
-      const req = new XMLHttpRequest();
-      try {
-        req.open("POST", "/api/" + zjs.loadString(pathPtr, pathLen), false);
-        req.setRequestHeader("x-termgate", "spa");
-        req.setRequestHeader("content-type", "application/json");
-        req.send(zjs.loadString(bodyPtr, bodyLen));
-      } catch (e) { answer = new Uint8Array(0); return 0; }
-      answer = enc.encode(req.responseText);
-      return req.status;
+    // POST /api/<path>, JSON, without waiting: the answer goes to the
+    // panel's tg_answer with the request's id (status 0: the server
+    // cannot be reached). The session cookie goes along by itself.
+    tg_post(id, pathPtr, pathLen, bodyPtr, bodyLen) {
+      const path = zjs.loadString(pathPtr, pathLen), body = zjs.loadString(bodyPtr, bodyLen);
+      fetch("/api/" + path, {
+        method: "POST",
+        headers: { "x-termgate": "spa", "content-type": "application/json" },
+        body,
+      }).then(async r => [r.status, await r.text()], () => [0, ""])
+        .then(([status, text]) => {
+          const b = enc.encode(text);
+          const p = x.tg_alloc(b.length || 1);
+          new Uint8Array(zjs.memory.buffer, p, b.length).set(b);
+          try { x.tg_answer(id, status, p, b.length); } finally { x.tg_free(p, b.length || 1); }
+        });
     },
-    tg_answer_len() { return answer.length; },
-    tg_answer_read(out) { new Uint8Array(zjs.memory.buffer, out, answer.length).set(answer); },
     tg_log(ptr, len) { console.log(zjs.loadString(ptr, len)); },
     tg_now() { return Date.now(); },
     // A new frame (layout.zig): its header is watched (our earlier project's
@@ -213,36 +214,14 @@
   });
 
   // A button whose call takes a while (data-wait: signing in): its form
-  // is disabled and the button gets a spinning wheel, drawn before the
-  // call starts (the call holds the page; the wheel turns on regardless)
-  let waiting = false;
+  // is disabled and the button gets a spinning wheel until the panel
+  // draws the page again with the answer
   function waitFor(btn) {
-    if (waiting) return;
-    waiting = true;
     const data = JSON.stringify(formData(btn));
     const form = btn.closest("form") || btn;
-    const fields = [...form.querySelectorAll("input, select, textarea, button")];
-    for (const f of fields) f.disabled = true;
-    const label = btn.innerHTML;
-    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> ' + label;
-    // After the next frame is drawn; a page that draws no frames (a
-    // headless browser) goes on after 50 ms
-    let started = false;
-    const go = () => {
-      if (started) return;
-      started = true;
-      try { call(x.tg_action, btn.dataset.action, data); }
-      finally {
-        waiting = false;
-        // Still on the page: usable again
-        if (btn.isConnected) {
-          btn.innerHTML = label;
-          for (const f of fields) f.disabled = false;
-        }
-      }
-    };
-    requestAnimationFrame(() => setTimeout(go, 0));
-    setTimeout(go, 50);
+    for (const f of form.querySelectorAll("input, select, textarea, button")) f.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> ' + btn.innerHTML;
+    call(x.tg_action, btn.dataset.action, data);
   }
 
   // A list's filter changed (data-change on a select): its action, with

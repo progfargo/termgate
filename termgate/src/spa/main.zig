@@ -140,6 +140,9 @@ export fn tg_free(ptr: [*]u8, len: usize) void {
     app.gpa.free(ptr[0..len]);
 }
 
+// Each event of the page runs as a job (fetch.zig): it may run again
+// when an answer it waits for comes.
+
 /// The page has loaded: who is signed in, then the page of the hash.
 export fn tg_start() void {
     app.beginEvent();
@@ -148,6 +151,10 @@ export fn tg_start() void {
     fetch.on_bad_request = router.renderBadRequest;
     fetch.on_not_found = router.renderNotFound;
     fetch.on_signed_out = onSignedOut;
+    fetch.start(.page, startRun, "", "");
+}
+
+fn startRun(_: []const u8, _: []const u8) void {
     login.reload();
     router.navigate(dom.hash());
 }
@@ -155,15 +162,24 @@ export fn tg_start() void {
 /// The hash changed (a link, the browser's back button).
 export fn tg_route(ptr: [*]const u8, len: usize) void {
     app.beginEvent();
-    // Leaving a watched session stops watching it
-    if (watch.watching() and !std.mem.startsWith(u8, ptr[0..len], "/session/watch")) watch.stop();
-    router.navigate(ptr[0..len]);
+    fetch.start(.page, routeRun, ptr[0..len], "");
 }
 
-/// Four times a second: a watched session's new output.
+fn routeRun(path: []const u8, _: []const u8) void {
+    // Leaving a watched session stops watching it
+    if (watch.watching() and !std.mem.startsWith(u8, path, "/session/watch")) watch.stop();
+    router.navigate(path);
+}
+
+/// Four times a second: a watched session's new output (one request at
+/// a time).
 export fn tg_tick() void {
-    if (!watch.watching()) return;
+    if (!watch.watching() or fetch.busy(.tick)) return;
     app.beginEvent();
+    fetch.start(.tick, tickRun, "", "");
+}
+
+fn tickRun(_: []const u8, _: []const u8) void {
     watch.tick();
 }
 
@@ -171,10 +187,19 @@ export fn tg_tick() void {
 /// form's fields and its data-* attributes.
 export fn tg_action(name_ptr: [*]const u8, name_len: usize, form_ptr: [*]const u8, form_len: usize) void {
     app.beginEvent();
-    const name = name_ptr[0..name_len];
-    const f = Form.parse(form_ptr[0..form_len]);
+    fetch.start(.page, actionRun, name_ptr[0..name_len], form_ptr[0..form_len]);
+}
+
+fn actionRun(name: []const u8, form: []const u8) void {
+    const f = Form.parse(form);
     for (actions) |a| if (std.mem.eql(u8, a.name, name)) return a.run(f);
     std.log.warn("unknown action {s}", .{name});
+}
+
+/// The answer to request `id` (web/spa/boot.js): its job runs again.
+export fn tg_answer(id: u32, status: i32, ptr: [*]const u8, len: usize) void {
+    app.beginEvent();
+    fetch.answer(id, status, ptr[0..len]);
 }
 
 /// WASM has no console of its own: log lines go to the page's.

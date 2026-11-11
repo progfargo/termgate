@@ -78,7 +78,7 @@ pub fn render(query: []const u8) void {
     w.sid_len = @min(sid.len, w.sid_buf.len);
     @memcpy(w.sid_buf[0..w.sid_len], sid[0..w.sid_len]);
     watch = w;
-    tick();
+    // The ticks read its output from now on (main.zig)
 }
 
 /// Leaving the page (or a new watch) stops the server's tap.
@@ -101,6 +101,7 @@ pub fn tick() void {
     if (std.mem.eql(u8, w.state, "ended") or std.mem.eql(u8, w.state, "failed")) return;
     const Chunk = struct { data: []const u8, next: u64, state: []const u8 };
     const answer = fetch.post("session/watch_read", .{ w.tap, w.offset }) orelse {
+        if (app.waiting) return;
         w.state = "failed";
         return showState(w);
     };

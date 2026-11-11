@@ -22,6 +22,7 @@ fn defaultHome() []const u8 {
 
 /// Renders the page for `full` ("/user?key=x").
 pub fn navigate(full: []const u8) void {
+    if (app.waiting) return;
     const q = std.mem.indexOfScalar(u8, full, '?');
     const path = if (q) |i| full[0..i] else full;
     const query = if (q) |i| full[i + 1 ..] else "";

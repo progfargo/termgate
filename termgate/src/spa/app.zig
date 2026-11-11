@@ -10,6 +10,10 @@ pub const gpa = if (builtin.cpu.arch == .wasm32) std.heap.wasm_allocator else st
 
 var event_arena: std.heap.ArenaAllocator = .init(gpa);
 
+/// A run of a job waits for an answer (fetch.zig): the rest of the run
+/// changes nothing on the page (dom, state, router leave it).
+pub var waiting = false;
+
 /// For one event (a click, a hash change): freed when the next one starts.
 pub fn arena() std.mem.Allocator {
     return event_arena.allocator();

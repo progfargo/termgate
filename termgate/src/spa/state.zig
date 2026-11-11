@@ -41,6 +41,7 @@ pub fn can(page: []const u8, func: []const u8) bool {
 
 /// Keeps the user from an answer (init, signing in); null signs out.
 pub fn setUser(v: ?std.json.Value) void {
+    if (app.waiting) return;
     _ = user_arena.reset(.retain_capacity);
     const val = v orelse {
         user = null;
@@ -88,6 +89,7 @@ pub fn takeMessages(answer: std.json.Value) void {
 
 /// A message of the page itself, shown with the next page drawn.
 pub fn say(kind: []const u8, text: []const u8) void {
+    if (app.waiting) return;
     const a = pending_arena.allocator();
     const lines = a.alloc([]const u8, 1) catch return;
     lines[0] = a.dupe(u8, text) catch return;
@@ -96,6 +98,7 @@ pub fn say(kind: []const u8, text: []const u8) void {
 
 /// The last answer's messages are shown with the next page drawn too.
 pub fn keepMessages() void {
+    if (app.waiting) return;
     const a = pending_arena.allocator();
     for (messages) |m| {
         const lines = a.alloc([]const u8, m.lines.len) catch return;
@@ -110,14 +113,34 @@ pub fn has(name: []const u8) bool {
     return false;
 }
 
+// A job (fetch.zig) may run more than once before it is done: the
+// messages of the page it says in a run that waits are said again in the
+// next run, and those it showed are dropped only when it is done.
+var job_mark: usize = 0;
+var shown = false;
+
+pub fn jobStarted() void {
+    job_mark = pending.items.len;
+}
+
+pub fn runStarted() void {
+    pending.shrinkRetainingCapacity(job_mark);
+    shown = false;
+}
+
+pub fn jobDone() void {
+    if (!shown) return;
+    pending = .empty;
+    _ = pending_arena.reset(.retain_capacity);
+    job_mark = 0;
+}
+
 /// Shows the messages in the message area (our earlier project's Msg.Render);
 /// false if there were none. Each can be closed; those that clear by
 /// themselves go after 5 seconds.
 pub fn renderMessages() bool {
-    defer {
-        pending = .empty;
-        _ = pending_arena.reset(.retain_capacity);
-    }
+    if (app.waiting) return false;
+    shown = true;
     if (messages.len == 0 and pending.items.len == 0) {
         dom.setHtml("site-message", "");
         return false;

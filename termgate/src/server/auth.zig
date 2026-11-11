@@ -110,6 +110,8 @@ pub fn caller(auth: *Auth, a: std.mem.Allocator, token: ?[]const u8, now: i64) !
     if (!s.full) return null;
     const acc = (try auth.db.userGet(a, s.user_id)) orelse return null;
     const own: Caller = .{ .id = acc.id, .name = acc.name, .is_superuser = acc.is_superuser, .rights = try auth.db.userRights(a, acc.id) };
+    // Without panel:login (a role taken since signing in) the session ends
+    if (!own.can("panel", "login")) return null;
     const eid = s.effective_user_id orelse return own;
     if (eid == acc.id) return own;
     const eff = (try auth.db.userGet(a, eid)) orelse return own;
@@ -188,6 +190,14 @@ fn login(auth: *Auth, a: std.mem.Allocator, body: []const u8, now: i64) !Reply {
         try auth.db.userFailed(acc.id, now);
         return fail(a, .unauthorized, "wrong name or password");
     }
+    // Signing in to the panel is a right (panel:login); a terminal user
+    // or a bot does not have it
+    {
+        auth.lock.lockUncancelable(auth.io);
+        defer auth.lock.unlock(auth.io);
+        if (!acc.is_superuser and !dbm.rights.has(try auth.db.userRights(a, acc.id), "panel", "login"))
+            return fail(a, .forbidden, "this user may not sign in to the panel");
+    }
 
     const token = try a.dupe(u8, &users.newToken(auth.io));
     auth.lock.lockUncancelable(auth.io);
@@ -251,11 +261,21 @@ fn userCall(auth: *Auth, a: std.mem.Allocator, name: []const u8, body: []const u
     if (std.mem.eql(u8, name, "list")) {
         if (!c.can("user", "browse")) return fail(a, .forbidden, no_right);
         const list = try db.userList(a);
-        const Row = struct { id: i64, name: []const u8, superuser: bool, disabled: bool, second_step: bool, created: i64, roles: []const dbm.RoleRef };
+        const Row = struct { id: i64, name: []const u8, superuser: bool, disabled: bool, second_step: bool, created: i64, roles: []const dbm.RoleRef, terminal: ?dbm.Terminal };
         const rows = try a.alloc(Row, list.len);
         // A user's roles are shown to who may see them
         const see_roles = c.can("user", "role_browse");
-        for (list, rows) |x, *r| r.* = .{ .id = x.id, .name = x.name, .superuser = x.is_superuser, .disabled = x.disabled, .second_step = x.totp_confirmed, .created = x.created, .roles = if (see_roles) try db.userRoles(a, x.id) else &.{} };
+        for (list, rows) |x, *r| r.* = .{
+            .id = x.id,
+            .name = x.name,
+            .superuser = x.is_superuser,
+            .disabled = x.disabled,
+            .second_step = x.totp_confirmed,
+            .created = x.created,
+            .roles = if (see_roles) try db.userRoles(a, x.id) else &.{},
+            // Its terminal access, if one was given
+            .terminal = try db.terminalGet(a, x.id),
+        };
         return .{ .body = try json(a, .{ .users = rows }) };
     }
     if (std.mem.eql(u8, name, "create")) {
@@ -511,35 +531,40 @@ test "sign in with two steps; users, roles and rights" {
     try testing.expectEqualStrings("code", field(a, again.body, "step"));
     try testing.expectEqual(std.http.Status.unauthorized, (try call(&auth, a, "login2", code, again.set_token.?, now)).?.status);
 
-    // The superuser makes a user; without a role it may do nothing
+    // The superuser makes a user; without a role it cannot even sign in
     const made = (try call(&auth, a, "users.create", "{\"name\":\"denetci\"}", token, now)).?;
     const aud_pw = field(a, made.body, "password");
     try testing.expectEqual(@as(usize, 20), aud_pw.len);
     try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.create", "{\"name\":\"denetci\"}", token, now)).?.status);
+    const aud_login = try std.fmt.allocPrint(a, "{{\"name\":\"denetci\",\"password\":\"{s}\"}}", .{aud_pw});
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "login", aud_login, null, now)).?.status);
+    // A role with only panel:login: it signs in and may do nothing
+    try testing.expectEqualStrings("{\"ok\":true,\"id\":4}", (try call(&auth, a, "roles.insert", "{\"name\":\"viewer\",\"rights\":[\"panel:login\"]}", token, now)).?.body);
+    _ = (try call(&auth, a, "users.grant", "{\"id\":2,\"role\":4}", token, now)).?;
     now += 60;
     const al1 = (try call(&auth, a, "login", try std.fmt.allocPrint(a, "{{\"name\":\"denetci\",\"password\":\"{s}\"}}", .{aud_pw}), null, now)).?;
     const aud_token = al1.set_token.?;
     const aud_secret = (try db.userTotpSecret(2)).?;
     _ = (try call(&auth, a, "login2", try std.fmt.allocPrint(a, "{{\"code\":\"{d:0>6}\"}}", .{users.totpCode(&aud_secret, @intCast(@divFloor(now, 30)))}), aud_token, now)).?;
-    try testing.expect(std.mem.indexOf(u8, (try call(&auth, a, "me", "{}", aud_token, now)).?.body, "\"rights\":[]") != null);
+    try testing.expect(std.mem.indexOf(u8, (try call(&auth, a, "me", "{}", aud_token, now)).?.body, "\"rights\":[\"panel:login\"]") != null);
     try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.list", "{}", aud_token, now)).?.status);
     try testing.expectEqual(std.http.Status.unauthorized, (try call(&auth, a, "users.list", "{}", null, now)).?.status);
 
     // A role with two rights, given to the user: the next call has them
     const role = (try call(&auth, a, "roles.insert", "{\"name\":\"clerk\",\"description\":\"Looks\",\"rights\":[\"user:browse\",\"user:role_browse\",\"role:browse\"]}", token, now)).?;
-    try testing.expectEqualStrings("{\"ok\":true,\"id\":3}", role.body);
+    try testing.expectEqualStrings("{\"ok\":true,\"id\":5}", role.body);
     try testing.expectEqual(std.http.Status.bad_request, (try call(&auth, a, "roles.insert", "{\"name\":\"x\",\"rights\":[\"user:fly\"]}", token, now)).?.status);
     try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.grant", "{\"id\":2,\"role\":1}", aud_token, now)).?.status);
-    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.grant", "{\"id\":2,\"role\":3}", token, now)).?.status);
-    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.grant", "{\"id\":2,\"role\":3}", token, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.grant", "{\"id\":2,\"role\":5}", token, now)).?.status);
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.grant", "{\"id\":2,\"role\":5}", token, now)).?.status);
     const listed = (try call(&auth, a, "users.list", "{}", aud_token, now)).?;
     try testing.expectEqual(std.http.Status.ok, listed.status);
-    try testing.expect(std.mem.indexOf(u8, listed.body, "\"roles\":[{\"id\":3,\"name\":\"clerk\"}]") != null);
-    try testing.expect(std.mem.indexOf(u8, (try call(&auth, a, "roles.get", "{\"id\":3}", aud_token, now)).?.body, "\"rights\":[\"role:browse\",\"user:browse\",\"user:role_browse\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, listed.body, "\"roles\":[{\"id\":5,\"name\":\"clerk\"},{\"id\":4,\"name\":\"viewer\"}]") != null);
+    try testing.expect(std.mem.indexOf(u8, (try call(&auth, a, "roles.get", "{\"id\":5}", aud_token, now)).?.body, "\"rights\":[\"role:browse\",\"user:browse\",\"user:role_browse\"]") != null);
     // Browsing is not changing
     try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.create", "{\"name\":\"x1\"}", aud_token, now)).?.status);
-    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "roles.update", "{\"id\":3,\"name\":\"clerk\",\"rights\":[\"user:delete\"]}", aud_token, now)).?.status);
-    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "roles.delete", "{\"id\":3}", token, now)).?.status);
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "roles.update", "{\"id\":5,\"name\":\"clerk\",\"rights\":[\"user:delete\"]}", aud_token, now)).?.status);
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "roles.delete", "{\"id\":5}", token, now)).?.status);
 
     // The superuser stays; nobody blocks or deletes themselves
     try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.update", "{\"id\":1,\"name\":\"superuser\",\"disabled\":true}", token, now)).?.status);
@@ -550,7 +575,7 @@ test "sign in with two steps; users, roles and rights" {
     _ = (try call(&auth, a, "users.update", "{\"id\":2,\"name\":\"okuyan\",\"disabled\":true}", token, now)).?;
     try testing.expectEqual(std.http.Status.unauthorized, (try call(&auth, a, "me", "{}", aud_token, now)).?.status);
     try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.delete", "{\"id\":2}", token, now)).?.status);
-    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "roles.delete", "{\"id\":3}", token, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "roles.delete", "{\"id\":5}", token, now)).?.status);
 
     // our earlier project's rules. erdem has the role admin (every right), but is
     // not the superuser.
@@ -578,17 +603,17 @@ test "sign in with two steps; users, roles and rights" {
     _ = (try call(&auth, a, "users.create", "{\"name\":\"veli\"}", token, now)).?;
     const veli = (try db.userByName(a, "veli")).?.id;
     try db.userSetOwnPassword(veli, try users.hashPassword(a, auth.io, "trabzon61", auth.cost));
-    const editor = try db.roleInsert("editor", "Names roles", &.{ "role:browse", "role:update" });
+    const editor = try db.roleInsert("editor", "Names roles", &.{ "panel:login", "role:browse", "role:update" });
     try db.userGrant(veli, editor);
     const vt = try testSignIn(&auth, a, "veli", "trabzon61", now);
     // Rights alone: role:role_right, which veli does not have
     try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "roles.rights", try std.fmt.allocPrint(a, "{{\"id\":{d},\"rights\":[]}}", .{editor}), vt, now)).?.status);
-    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "roles.rights", try std.fmt.allocPrint(a, "{{\"id\":{d},\"rights\":[\"role:browse\",\"role:update\"]}}", .{editor}), token, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "roles.rights", try std.fmt.allocPrint(a, "{{\"id\":{d},\"rights\":[\"panel:login\",\"role:browse\",\"role:update\"]}}", .{editor}), token, now)).?.status);
     try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "roles.rights", "{\"id\":1,\"rights\":[]}", et, now)).?.status);
     const ed_body = try std.fmt.allocPrint(a, "{{\"id\":{d},\"name\":\"editor\",\"description\":\"Renamed\"", .{editor});
     try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "roles.update", try std.mem.concat(a, u8, &.{ ed_body, ",\"rights\":[]}" }), vt, now)).?.status);
     try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "roles.update", try std.mem.concat(a, u8, &.{ ed_body, "}" }), vt, now)).?.status);
-    try testing.expectEqual(@as(usize, 2), (try db.roleRights(a, editor)).len);
+    try testing.expectEqual(@as(usize, 3), (try db.roleRights(a, editor)).len);
     // Acting as another user: veli's rights apply, the audit names both
     const vid = try std.fmt.allocPrint(a, "{{\"id\":{d}}}", .{veli});
     try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.select", "{\"id\":1}", et, now)).?.status);

@@ -54,12 +54,9 @@ const routes = [_]Route{
     .{ .path = "node/status", .call = "svc.requestStatusOf" },
     .{ .path = "node/status_all", .call = "svc.requestStatus" },
     .{ .path = "node/sessions", .call = "db.sessionsOfNode" },
-    // People: terminal access
-    .{ .path = "person/browse", .call = "db.personList" },
-    .{ .path = "person/get", .call = "db.personGet" },
-    .{ .path = "person/invite", .call = "people.invite" },
-    .{ .path = "person/revoke", .call = "db.personRevoke" },
-    .{ .path = "person/kick", .call = "svc.kickUser" },
+    // A user's terminal access
+    .{ .path = "user/terminal_invite", .call = "terminal.invite" },
+    .{ .path = "user/terminal_revoke", .call = "terminal.revoke" },
     // Sessions
     .{ .path = "session/browse", .call = "db.sessionsActive" },
     .{ .path = "session/recent", .call = "db.sessionsRecent" },

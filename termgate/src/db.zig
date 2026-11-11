@@ -17,7 +17,7 @@ const types = @import("db_types.zig");
 
 pub const Error = types.Error;
 pub const NodeState = types.NodeState;
-pub const Person = types.Person;
+pub const Terminal = types.Terminal;
 pub const Session = types.Session;
 pub const Settings = types.Settings;
 pub const Role = types.Role;
@@ -118,36 +118,6 @@ pub const Db = struct {
         );
         // Databases from before the online column (fails when it exists)
         db.exec("ALTER TABLE node ADD COLUMN online INTEGER NOT NULL DEFAULT 0") catch {};
-        // A person (or bot) and their invitation: the grant spec is chosen by
-        // the admin when inviting; the user key arrives when the invitation is
-        // used.
-        try db.exec(
-            \\CREATE TABLE IF NOT EXISTS person (
-            \\    personId INTEGER PRIMARY KEY,
-            \\    name TEXT NOT NULL,
-            \\    kind TEXT NOT NULL,
-            \\    userKey TEXT UNIQUE,
-            \\    tokenHash TEXT UNIQUE,
-            \\    tokenExpires INTEGER,
-            \\    nodes TEXT NOT NULL,
-            \\    runAs TEXT NOT NULL,
-            \\    maxUses INTEGER,
-            \\    grantExp INTEGER,
-            \\    revoked INTEGER NOT NULL DEFAULT 0,
-            \\    created INTEGER NOT NULL
-            \\)
-        );
-        try db.exec(
-            \\CREATE TABLE IF NOT EXISTS grantRecord (
-            \\    jti TEXT PRIMARY KEY,
-            \\    personId INTEGER NOT NULL REFERENCES person(personId) ON DELETE CASCADE,
-            \\    token TEXT NOT NULL,
-            \\    maxUses INTEGER,
-            \\    uses INTEGER NOT NULL DEFAULT 0,
-            \\    exp INTEGER,
-            \\    revoked INTEGER NOT NULL DEFAULT 0
-            \\)
-        );
         try db.exec(
             \\CREATE TABLE IF NOT EXISTS setting (
             \\    name TEXT PRIMARY KEY,
@@ -233,11 +203,43 @@ pub const Db = struct {
             try db.exec("insert or ignore into roleRight(roleId, module, action) select roleId, 'profile', 'browse' from role");
             try db.exec("insert or ignore into roleRight(roleId, module, action) select roleId, 'profile', 'update_password' from role");
             inline for (rights.modules) |m| {
+                if (comptime std.mem.eql(u8, m.name, "terminal")) continue;
                 inline for (m.actions) |ac|
                     try db.exec("insert or ignore into roleRight(roleId, module, action) select roleId, '" ++ m.name ++ "', '" ++ ac.name ++ "' from role where name = 'admin'");
             }
             try db.exec("delete from roleRight where module = 'user' and action = 'roles'");
             try db.commit();
+        }
+        // A user's terminal access: the grant spec chosen by an admin when
+        // giving it, and the user's key once the invitation is used
+        try db.exec(
+            \\CREATE TABLE IF NOT EXISTS terminal (
+            \\    userId INTEGER PRIMARY KEY REFERENCES user(userId) ON DELETE CASCADE,
+            \\    kind TEXT NOT NULL,
+            \\    userKey TEXT UNIQUE,
+            \\    tokenHash TEXT UNIQUE,
+            \\    tokenExpires INTEGER,
+            \\    nodes TEXT NOT NULL,
+            \\    runAs TEXT NOT NULL,
+            \\    maxUses INTEGER,
+            \\    grantExp INTEGER,
+            \\    revoked INTEGER NOT NULL DEFAULT 0,
+            \\    created INTEGER NOT NULL
+            \\)
+        );
+        // The grants termgate issued, with their uses
+        if (!try db.has("select 1 from sqlite_master where type = 'table' and name = 'grantRecord'")) try db.exec(grant_record_table);
+        // Databases from before one kind of user: people become users
+        if (try db.has("select 1 from sqlite_master where type = 'table' and name = 'person'")) try db.migratePeople();
+        // Version 1: signing in to the panel and connecting to nodes are
+        // rights. Before, every user could sign in: every role gets
+        // panel:login, and a role terminal_user gives terminal:connect.
+        if (first_roles) {
+            try db.exec("PRAGMA user_version = 1");
+        } else if (try db.version() < 1) {
+            try db.exec("insert or ignore into roleRight(roleId, module, action) select roleId, 'panel', 'login' from role");
+            try db.seedTerminalRole();
+            try db.exec("PRAGMA user_version = 1");
         }
         // What panel users did: every changing call and every sign-in
         try db.exec(
@@ -270,7 +272,7 @@ pub const Db = struct {
             \\    sid TEXT NOT NULL UNIQUE,
             \\    node TEXT NOT NULL,
             \\    userKey TEXT NOT NULL,
-            \\    personName TEXT NOT NULL,
+            \\    userName TEXT NOT NULL,
             \\    grantJti TEXT NOT NULL,
             \\    started INTEGER NOT NULL,
             \\    ended INTEGER,
@@ -280,6 +282,99 @@ pub const Db = struct {
         );
         // Databases from before end-to-end encryption (fails when it exists)
         db.exec("ALTER TABLE session ADD COLUMN keys BLOB") catch {};
+        // Databases from before one kind of user
+        if (try db.has("select 1 from pragma_table_info('session') where name = 'personName'"))
+            try db.exec("ALTER TABLE session RENAME COLUMN personName TO userName");
+    }
+
+    const grant_record_table =
+        \\CREATE TABLE grantRecord (
+        \\    jti TEXT PRIMARY KEY,
+        \\    userId INTEGER NOT NULL REFERENCES user(userId) ON DELETE CASCADE,
+        \\    token TEXT NOT NULL,
+        \\    maxUses INTEGER,
+        \\    uses INTEGER NOT NULL DEFAULT 0,
+        \\    exp INTEGER,
+        \\    revoked INTEGER NOT NULL DEFAULT 0
+        \\)
+    ;
+
+    /// The database's version (PRAGMA user_version): one-time migrations.
+    fn version(db: *Db) Error!i64 {
+        var st = try Stmt.prepare(db, "PRAGMA user_version");
+        defer st.finalize();
+        _ = try st.step();
+        return st.int(0);
+    }
+
+    /// The role terminal_user: connecting to nodes with tgterm.
+    fn seedTerminalRole(db: *Db) Error!void {
+        try db.exec("insert or ignore into role(name, description) values('terminal_user', 'Connects to nodes with tgterm; which nodes and as whom is set per user.')");
+        try db.exec("insert or ignore into roleRight(roleId, module, action) select roleId, 'terminal', 'connect' from role where name = 'terminal_user'");
+    }
+
+    /// Each person of an older database becomes a user: named from the
+    /// person's name as user names go (lowercase, unique), with no password
+    /// (it cannot sign in to the panel), the role terminal_user, and the
+    /// person's access as its terminal access; the grants follow.
+    fn migratePeople(db: *Db) Error!void {
+        try db.begin();
+        errdefer db.rollback();
+        try db.exec("CREATE TEMP TABLE personUser (personId INTEGER PRIMARY KEY, userId INTEGER NOT NULL)");
+        try db.seedTerminalRole();
+        {
+            var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+            defer arena.deinit();
+            const a = arena.allocator();
+            var people: std.ArrayList(struct { id: i64, name: []const u8, created: i64, revoked: bool }) = .empty;
+            {
+                var st = try Stmt.prepare(db, "select personId, name, created, revoked from person order by personId");
+                defer st.finalize();
+                while (try st.step()) try people.append(a, .{ .id = st.int(0), .name = try st.text(a, 1), .created = st.int(2), .revoked = st.int(3) != 0 });
+            }
+            for (people.items) |p| {
+                const base = try userNameFrom(a, p.name);
+                var name = base;
+                var n: usize = 2;
+                while (try db.userNameTaken(name)) : (n += 1) name = try std.fmt.allocPrint(a, "{s}_{d}", .{ base[0..@min(base.len, 28)], n });
+                // "!" is no password hash: nothing signs in with it
+                const uid = db.userCreate(name, false, "!", p.created) catch return error.SqliteError;
+                var st = try Stmt.prepare(db, "insert into personUser(personId, userId) values(?, ?)");
+                defer st.finalize();
+                try st.bindInt(1, p.id);
+                try st.bindInt(2, uid);
+                try st.done();
+                if (!p.revoked) {
+                    var g = try Stmt.prepare(db, "insert or ignore into userRole(userId, roleId) select ?, roleId from role where name = 'terminal_user'");
+                    defer g.finalize();
+                    try g.bindInt(1, uid);
+                    try g.done();
+                }
+            }
+        }
+        try db.exec(
+            \\insert into terminal(userId, kind, userKey, tokenHash, tokenExpires, nodes, runAs, maxUses, grantExp, revoked, created)
+            \\select m.userId, p.kind, p.userKey, p.tokenHash, p.tokenExpires, p.nodes, p.runAs, p.maxUses, p.grantExp, p.revoked, p.created
+            \\from person p join personUser m on m.personId = p.personId
+        );
+        try db.exec("ALTER TABLE grantRecord RENAME TO grantRecordOld");
+        try db.exec(grant_record_table);
+        try db.exec(
+            \\insert into grantRecord(jti, userId, token, maxUses, uses, exp, revoked)
+            \\select g.jti, m.userId, g.token, g.maxUses, g.uses, g.exp, g.revoked
+            \\from grantRecordOld g join personUser m on m.personId = g.personId
+        );
+        try db.exec("DROP TABLE grantRecordOld");
+        try db.exec("DROP TABLE person");
+        try db.exec("DROP TABLE personUser");
+        try db.commit();
+    }
+
+    fn userNameTaken(db: *Db, name: []const u8) Error!bool {
+        var st = try Stmt.prepare(db, "select 1 from user where name = ?");
+        defer st.finalize();
+        try st.bindText(1, name);
+        return try st.step();
     }
 
     /// Does the query give a row.
@@ -293,11 +388,15 @@ pub const Db = struct {
     fn seedRoles(db: *Db) Error!void {
         try db.exec("insert or ignore into role(roleId, name, description) values(1, 'admin', 'Everything in the panel.')");
         try db.exec("insert or ignore into role(roleId, name, description) values(2, 'auditor', 'Reads only: nodes, sessions and their logs, audit.')");
+        // admin: every right but connecting to nodes (an admin who does that
+        // gets the role terminal_user too)
         inline for (rights.modules) |m| {
+            if (comptime std.mem.eql(u8, m.name, "terminal")) continue;
             inline for (m.actions) |ac|
                 try db.exec("insert or ignore into roleRight(roleId, module, action) values(1, '" ++ m.name ++ "', '" ++ ac.name ++ "')");
         }
-        inline for (.{ "node:browse", "session:browse", "session:watch", "session:log", "audit:browse", "user:browse", "config:browse", "profile:browse", "profile:update_password" }) |r| {
+        try db.seedTerminalRole();
+        inline for (.{ "panel:login", "node:browse", "session:browse", "session:watch", "session:log", "audit:browse", "user:browse", "config:browse", "profile:browse", "profile:update_password" }) |r| {
             const p = comptime rights.parse(r).?;
             try db.exec("insert or ignore into roleRight(roleId, module, action) values(2, '" ++ p.module ++ "', '" ++ p.action ++ "')");
         }
@@ -326,6 +425,20 @@ pub const Db = struct {
         if (name.len < 2 or name.len > 32 or !std.ascii.isLower(name[0])) return false;
         for (name) |ch| if (!std.ascii.isLower(ch) and !std.ascii.isDigit(ch) and ch != '_' and ch != '.' and ch != '-') return false;
         return true;
+    }
+
+    /// A valid user name made from any name ("Veli Kaya" -> "veli_kaya").
+    pub fn userNameFrom(a: std.mem.Allocator, name: []const u8) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        for (name) |ch| {
+            if (out.items.len == 32) break;
+            const l = std.ascii.toLower(ch);
+            try out.append(a, if (std.ascii.isLower(l) or std.ascii.isDigit(l) or l == '.' or l == '-') l else '_');
+        }
+        if (out.items.len == 0 or !std.ascii.isLower(out.items[0])) try out.insertSlice(a, 0, "u_");
+        while (out.items.len < 2) try out.append(a, '_');
+        if (out.items.len > 32) out.shrinkRetainingCapacity(32);
+        return out.items;
     }
 
     pub fn userCreate(db: *Db, name: []const u8, superuser: bool, password_hash: []const u8, now: i64) UserError!i64 {
@@ -1066,103 +1179,142 @@ pub const Db = struct {
         if (c.sqlite3_changes(db.handle) == 0) return error.NotFound;
     }
 
-    // --- people and invitations ---------------------------------------------
+    // --- terminal access --------------------------------------------------
 
-    pub const PersonError = types.PersonError;
+    pub const TerminalError = types.TerminalError;
+    pub const TerminalSpec = types.TerminalSpec;
 
-    pub const Invitation = types.Invitation;
+    /// Who may connect: a user not blocked, its access not revoked, with
+    /// terminal:connect from a role (or the superuser). For a query over
+    /// terminal t joined with user u.
+    const may_connect =
+        \\t.revoked = 0 and u.disabled = 0 and (u.isSuperuser = 1 or exists (
+        \\  select 1 from userRole ur join roleRight rr on rr.roleId = ur.roleId
+        \\  where ur.userId = u.userId and rr.module = 'terminal' and rr.action = 'connect'))
+    ;
 
-    /// The admin invites someone. `token_hash` is the hash of the
-    /// invitation's token, usable until `token_expires`.
-    pub fn personInvite(db: *Db, inv: Invitation, token_hash: []const u8, token_expires: i64, now: i64) PersonError!i64 {
-        if (inv.name.len == 0 or inv.run_as.len == 0) return error.InvalidSpec;
-        if (inv.max_uses == null and inv.grant_exp == null) return error.InvalidSpec;
-        if (inv.max_uses) |m| if (m == 0) return error.InvalidSpec;
-        var it = std.mem.splitScalar(u8, inv.nodes, ',');
+    /// An admin gives `user_id` terminal access: a new invitation with
+    /// this token hash, usable until `token_expires`. Access the user had
+    /// before (its key, its grants) ends.
+    pub fn terminalInvite(db: *Db, user_id: i64, spec: TerminalSpec, token_hash: []const u8, token_expires: i64, now: i64) TerminalError!void {
+        if (spec.run_as.len == 0) return error.InvalidSpec;
+        if (spec.max_uses == null and spec.grant_exp == null) return error.InvalidSpec;
+        if (spec.max_uses) |m| if (m == 0) return error.InvalidSpec;
+        var it = std.mem.splitScalar(u8, spec.nodes, ',');
         while (it.next()) |p| if (!core.node.isValidPattern(p)) return error.InvalidSpec;
 
-        var st = try Stmt.prepare(db,
-            \\insert into person(name, kind, tokenHash, tokenExpires, nodes, runAs, maxUses, grantExp, created)
-            \\values(?, ?, ?, ?, ?, ?, ?, ?, ?)
-        );
-        defer st.finalize();
-        try st.bindText(1, inv.name);
-        try st.bindText(2, @tagName(inv.kind));
-        try st.bindText(3, token_hash);
-        try st.bindInt(4, token_expires);
-        try st.bindText(5, inv.nodes);
-        try st.bindText(6, inv.run_as);
-        try st.bindOptInt(7, if (inv.max_uses) |m| m else null);
-        try st.bindOptInt(8, inv.grant_exp);
-        try st.bindInt(9, now);
-        st.done() catch |e| return db.mapUnique(e);
-        return c.sqlite3_last_insert_rowid(db.handle);
+        try db.begin();
+        errdefer db.rollback();
+        if (!try db.hasId("select 1 from user where userId = ?", user_id)) return error.NotFound;
+        {
+            var st = try Stmt.prepare(db, "update grantRecord set revoked = 1 where userId = ?");
+            defer st.finalize();
+            try st.bindInt(1, user_id);
+            try st.done();
+        }
+        {
+            var st = try Stmt.prepare(db,
+                \\insert or replace into terminal(userId, kind, userKey, tokenHash, tokenExpires, nodes, runAs, maxUses, grantExp, revoked, created)
+                \\values(?, ?, null, ?, ?, ?, ?, ?, ?, 0, ?)
+            );
+            defer st.finalize();
+            try st.bindInt(1, user_id);
+            try st.bindText(2, @tagName(spec.kind));
+            try st.bindText(3, token_hash);
+            try st.bindInt(4, token_expires);
+            try st.bindText(5, spec.nodes);
+            try st.bindText(6, spec.run_as);
+            try st.bindOptInt(7, if (spec.max_uses) |m| m else null);
+            try st.bindOptInt(8, spec.grant_exp);
+            try st.bindInt(9, now);
+            st.done() catch |e| return db.mapUnique(e);
+        }
+        try db.commit();
     }
 
-    /// The person whose unused, unexpired invitation has this token id
+    fn hasId(db: *Db, sql: [:0]const u8, id: i64) Error!bool {
+        var st = try Stmt.prepare(db, sql);
+        defer st.finalize();
+        try st.bindInt(1, id);
+        return try st.step();
+    }
+
+    /// The access whose unused, unexpired invitation has this token id
     /// (subject invite.<id>).
-    pub fn personByTokenId(db: *Db, a: std.mem.Allocator, token_id: []const u8, now: i64) !?Person {
-        var st = try Stmt.prepare(db, person_select ++ " where substr(tokenHash, 1, 16) = ? and tokenExpires > ? and userKey is null and revoked = 0");
+    pub fn terminalByTokenId(db: *Db, a: std.mem.Allocator, token_id: []const u8, now: i64) !?Terminal {
+        var st = try Stmt.prepare(db, terminal_select ++ " where substr(t.tokenHash, 1, 16) = ? and t.tokenExpires > ? and t.userKey is null and " ++ may_connect);
         defer st.finalize();
         try st.bindText(1, token_id);
         try st.bindInt(2, now);
         if (!try st.step()) return null;
-        return try st.person(a);
+        return try st.terminal(a);
     }
 
-    /// The person whose unused, unexpired invitation has this token hash.
-    pub fn personByToken(db: *Db, a: std.mem.Allocator, token_hash: []const u8, now: i64) !?Person {
-        var st = try Stmt.prepare(db, person_select ++ " where tokenHash = ? and tokenExpires > ? and userKey is null and revoked = 0");
+    /// The access whose unused, unexpired invitation has this token hash.
+    pub fn terminalByToken(db: *Db, a: std.mem.Allocator, token_hash: []const u8, now: i64) !?Terminal {
+        var st = try Stmt.prepare(db, terminal_select ++ " where t.tokenHash = ? and t.tokenExpires > ? and t.userKey is null and " ++ may_connect);
         defer st.finalize();
         try st.bindText(1, token_hash);
         try st.bindInt(2, now);
         if (!try st.step()) return null;
-        return try st.person(a);
+        return try st.terminal(a);
     }
 
-    /// The person (not revoked) with this user key.
-    pub fn personByKey(db: *Db, a: std.mem.Allocator, user_key: []const u8) !?Person {
-        var st = try Stmt.prepare(db, person_select ++ " where userKey = ? and revoked = 0");
+    /// The access with this user key, if the user may connect now.
+    pub fn terminalByKey(db: *Db, a: std.mem.Allocator, user_key: []const u8) !?Terminal {
+        var st = try Stmt.prepare(db, terminal_select ++ " where t.userKey = ? and " ++ may_connect);
         defer st.finalize();
         try st.bindText(1, user_key);
         if (!try st.step()) return null;
-        return try st.person(a);
+        return try st.terminal(a);
     }
 
-    pub fn personGet(db: *Db, a: std.mem.Allocator, id: i64) !?Person {
-        var st = try Stmt.prepare(db, person_select ++ " where personId = ?");
+    /// A user's terminal access, whatever its state; null: none given.
+    pub fn terminalGet(db: *Db, a: std.mem.Allocator, user_id: i64) !?Terminal {
+        var st = try Stmt.prepare(db, terminal_select ++ " where t.userId = ?");
         defer st.finalize();
-        try st.bindInt(1, id);
+        try st.bindInt(1, user_id);
         if (!try st.step()) return null;
-        return try st.person(a);
+        return try st.terminal(a);
     }
 
-    pub fn personList(db: *Db, a: std.mem.Allocator) ![]Person {
-        var st = try Stmt.prepare(db, person_select ++ " order by created desc");
+    pub fn terminalList(db: *Db, a: std.mem.Allocator) ![]Terminal {
+        var st = try Stmt.prepare(db, terminal_select ++ " order by u.name");
         defer st.finalize();
-        var list: std.ArrayList(Person) = .empty;
-        while (try st.step()) try list.append(a, try st.person(a));
+        var list: std.ArrayList(Terminal) = .empty;
+        while (try st.step()) try list.append(a, try st.terminal(a));
+        return list.toOwnedSlice(a);
+    }
+
+    /// The keys of users who have used their invitation but may not
+    /// connect any more (revoked, blocked, or no terminal:connect): their
+    /// connections are to be closed.
+    pub fn terminalKeysDenied(db: *Db, a: std.mem.Allocator) ![]const []const u8 {
+        var st = try Stmt.prepare(db, "select t.userKey from terminal t join user u on u.userId = t.userId where t.userKey is not null and not (" ++ may_connect ++ ")");
+        defer st.finalize();
+        var list: std.ArrayList([]const u8) = .empty;
+        while (try st.step()) try list.append(a, try st.text(a, 0));
         return list.toOwnedSlice(a);
     }
 
     /// The invitation is used: bind the key, use up the token and store the
     /// grant termgate issued for the key. One transaction.
-    pub fn personRedeem(db: *Db, id: i64, user_key: []const u8, jti: []const u8, grant_token: []const u8, max_uses: ?u32, exp: ?i64) PersonError!void {
+    pub fn terminalRedeem(db: *Db, user_id: i64, user_key: []const u8, jti: []const u8, grant_token: []const u8, max_uses: ?u32, exp: ?i64) TerminalError!void {
         try db.begin();
         errdefer db.rollback();
         {
-            var st = try Stmt.prepare(db, "update person set userKey = ?, tokenHash = null, tokenExpires = null where personId = ? and userKey is null");
+            var st = try Stmt.prepare(db, "update terminal set userKey = ?, tokenHash = null, tokenExpires = null where userId = ? and userKey is null");
             defer st.finalize();
             try st.bindText(1, user_key);
-            try st.bindInt(2, id);
+            try st.bindInt(2, user_id);
             st.done() catch |e| return db.mapUnique(e);
             if (c.sqlite3_changes(db.handle) == 0) return error.NotFound;
         }
         {
-            var st = try Stmt.prepare(db, "insert into grantRecord(jti, personId, token, maxUses, exp) values(?, ?, ?, ?, ?)");
+            var st = try Stmt.prepare(db, "insert into grantRecord(jti, userId, token, maxUses, exp) values(?, ?, ?, ?, ?)");
             defer st.finalize();
             try st.bindText(1, jti);
-            try st.bindInt(2, id);
+            try st.bindInt(2, user_id);
             try st.bindText(3, grant_token);
             try st.bindOptInt(4, if (max_uses) |m| m else null);
             try st.bindOptInt(5, exp);
@@ -1171,21 +1323,22 @@ pub const Db = struct {
         try db.commit();
     }
 
-    /// Revoking a person stops their connections (callout) and their grants.
-    pub fn personRevoke(db: *Db, id: i64) PersonError!void {
+    /// Revoking ends a user's terminal access: its connections are refused
+    /// (callout) and its grants stop.
+    pub fn terminalRevoke(db: *Db, user_id: i64) TerminalError!void {
         try db.begin();
         errdefer db.rollback();
         {
-            var st = try Stmt.prepare(db, "update person set revoked = 1 where personId = ?");
+            var st = try Stmt.prepare(db, "update terminal set revoked = 1 where userId = ?");
             defer st.finalize();
-            try st.bindInt(1, id);
+            try st.bindInt(1, user_id);
             try st.done();
             if (c.sqlite3_changes(db.handle) == 0) return error.NotFound;
         }
         {
-            var st = try Stmt.prepare(db, "update grantRecord set revoked = 1 where personId = ?");
+            var st = try Stmt.prepare(db, "update grantRecord set revoked = 1 where userId = ?");
             defer st.finalize();
-            try st.bindInt(1, id);
+            try st.bindInt(1, user_id);
             try st.done();
         }
         try db.commit();
@@ -1210,10 +1363,8 @@ pub const Db = struct {
         var name_buf: [128]u8 = undefined;
         var name: []const u8 = "";
         {
-            var st = try Stmt.prepare(db,
-                \\select g.maxUses, g.uses, g.exp, g.revoked, p.revoked, p.name, p.userKey
-                \\from grantRecord g join person p on p.personId = g.personId where g.jti = ?
-            );
+            var st = try Stmt.prepare(db, "select g.maxUses, g.uses, g.exp, g.revoked, case when " ++ may_connect ++ " then 0 else 1 end, u.name, t.userKey " ++
+                "from grantRecord g join terminal t on t.userId = g.userId join user u on u.userId = g.userId where g.jti = ?");
             defer st.finalize();
             try st.bindText(1, jti);
             if (!try st.step()) return .{ .denied = "unknown grant" };
@@ -1235,7 +1386,7 @@ pub const Db = struct {
             try up.done();
         }
         {
-            var ins = try Stmt.prepare(db, "insert into session(sid, node, userKey, personName, grantJti, started) values(?, ?, ?, ?, ?, ?)");
+            var ins = try Stmt.prepare(db, "insert into session(sid, node, userKey, userName, grantJti, started) values(?, ?, ?, ?, ?, ?)");
             defer ins.finalize();
             try ins.bindText(1, sid);
             try ins.bindText(2, node);
@@ -1345,7 +1496,7 @@ pub const Db = struct {
             .sid = try st.text(a, 0),
             .node = try st.text(a, 1),
             .user_key = try st.text(a, 2),
-            .person = try st.text(a, 3),
+            .user = try st.text(a, 3),
             .grant_jti = try st.text(a, 4),
             .started = st.int(5),
             .ended = st.optInt(6),
@@ -1354,9 +1505,9 @@ pub const Db = struct {
         return list.toOwnedSlice(a);
     }
 
-    const session_select = "select sid, node, userKey, personName, grantJti, started, ended, exitStatus from session";
-    const person_select = "select personId, name, kind, userKey, nodes, runAs, maxUses, grantExp, revoked, created, tokenExpires, " ++
-        "(select uses from grantRecord g where g.personId = person.personId order by g.rowid desc limit 1) from person";
+    const session_select = "select sid, node, userKey, userName, grantJti, started, ended, exitStatus from session";
+    const terminal_select = "select t.userId, u.name, t.kind, t.userKey, t.nodes, t.runAs, t.maxUses, t.grantExp, t.revoked, t.created, t.tokenExpires, " ++
+        "(select uses from grantRecord g where g.userId = t.userId order by g.rowid desc limit 1) from terminal t join user u on u.userId = t.userId";
 
     const node_select = "select nodeId, name, description, state, hardwareKey, requestKey, status, created, lastSeen, tokenExpires, online from node";
 
@@ -1439,7 +1590,7 @@ const Stmt = struct {
         return p[0..@intCast(c.sqlite3_column_bytes(st.handle, col))];
     }
 
-    fn person(st: *Stmt, a: std.mem.Allocator) !Person {
+    fn terminal(st: *Stmt, a: std.mem.Allocator) !Terminal {
         return .{
             .id = st.int(0),
             .name = try st.text(a, 1),
@@ -1593,7 +1744,17 @@ test "reject, disable, new node key, status, online, list, delete" {
     try testing.expectError(error.NotFound, db.nodeDelete(id));
 }
 
-test "invitation, redemption, grant uses and sessions" {
+/// A user with the role terminal_user, for the terminal tests.
+fn testTerminalUser(db: *Db, name: []const u8) !i64 {
+    const id = try db.userCreate(name, false, "!", t0);
+    var st = try Stmt.prepare(db, "insert into userRole(userId, roleId) select ?, roleId from role where name = 'terminal_user'");
+    defer st.finalize();
+    try st.bindInt(1, id);
+    try st.done();
+    return id;
+}
+
+test "terminal access: invitation, redemption, grant uses and sessions" {
     var db = try testDb();
     defer db.close();
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -1601,27 +1762,28 @@ test "invitation, redemption, grant uses and sessions" {
     const a = arena.allocator();
 
     const th = tokenHash("INV");
-    const id = try db.personInvite(.{ .name = "Ali", .nodes = "ist_*,pump??", .run_as = "root", .max_uses = 2 }, &th, t0 + 3600, t0);
-    const p = (try db.personByToken(a, &th, t0)).?;
-    try testing.expectEqualStrings("Ali", p.name);
+    const id = try testTerminalUser(&db, "ali");
+    try db.terminalInvite(id, .{ .nodes = "ist_*,pump??", .run_as = "root", .max_uses = 2 }, &th, t0 + 3600, t0);
+    const p = (try db.terminalByToken(a, &th, t0)).?;
+    try testing.expectEqualStrings("ali", p.name);
     const tid = core.code.tokenId("INV");
-    try testing.expectEqual(id, (try db.personByTokenId(a, &tid, t0)).?.id);
+    try testing.expectEqual(id, (try db.terminalByTokenId(a, &tid, t0)).?.id);
     try testing.expectEqual(@as(?[]const u8, null), p.user_key);
 
-    try db.personRedeem(id, "UALI", "JTI1", "<grant jwt>", 2, null);
-    // The invitation is used up; the key now identifies Ali
-    try testing.expect((try db.personByToken(a, &th, t0)) == null);
-    try testing.expectEqualStrings("Ali", (try db.personByKey(a, "UALI")).?.name);
-    try testing.expectError(error.NotFound, db.personRedeem(id, "UOTHER", "JTI2", "x", 1, null));
+    try db.terminalRedeem(id, "UALI", "JTI1", "<grant jwt>", 2, null);
+    // The invitation is used up; the key now identifies ali
+    try testing.expect((try db.terminalByToken(a, &th, t0)) == null);
+    try testing.expectEqualStrings("ali", (try db.terminalByKey(a, "UALI")).?.name);
+    try testing.expectError(error.NotFound, db.terminalRedeem(id, "UOTHER", "JTI2", "x", 1, null));
 
     // Two uses allowed, the third is refused
     try testing.expectEqual(Db.UseResult.allowed, try db.grantUse("JTI1", "ist_gw1", "S1", "UALI", t0 + 10));
     try testing.expectEqual(Db.UseResult.allowed, try db.grantUse("JTI1", "pump07", "S2", "UALI", t0 + 20));
     try testing.expectEqualStrings("no uses left", (try db.grantUse("JTI1", "ist_gw1", "S3", "UALI", t0 + 30)).denied);
     try testing.expectEqual(@as(?i64, 2), try db.grantUses("JTI1"));
-    try testing.expectEqual(@as(?i64, 2), (try db.personGet(a, id)).?.uses);
+    try testing.expectEqual(@as(?i64, 2), (try db.terminalGet(a, id)).?.uses);
 
-    // Somebody else presenting Ali's grant; an unknown grant
+    // Somebody else presenting ali's grant; an unknown grant
     try testing.expectEqualStrings("grant belongs to someone else", (try db.grantUse("JTI1", "ist_gw1", "S4", "UMALLORY", t0)).denied);
     try testing.expectEqualStrings("unknown grant", (try db.grantUse("NOPE", "ist_gw1", "S5", "UALI", t0)).denied);
 
@@ -1634,11 +1796,11 @@ test "invitation, redemption, grant uses and sessions" {
     try testing.expectEqualStrings("S2", recent[0].sid);
     try testing.expectEqual(@as(?i64, t0 + 100), recent[1].ended);
     try testing.expectEqual(@as(?i64, 0), recent[1].exit_status);
-    try testing.expectEqualStrings("Ali", recent[1].person);
+    try testing.expectEqualStrings("ali", recent[1].user);
     try testing.expectEqual(@as(usize, 1), (try db.sessionsActive(a)).len);
 }
 
-test "expiry and revocation" {
+test "terminal access: expiry, revocation, and the right to connect" {
     var db = try testDb();
     defer db.close();
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -1646,26 +1808,66 @@ test "expiry and revocation" {
     const a = arena.allocator();
 
     const th = tokenHash("INV2");
-    const id = try db.personInvite(.{ .name = "bot", .kind = .bot, .nodes = "*", .run_as = "tgbot", .grant_exp = t0 + 60 }, &th, t0 + 10, t0);
+    const id = try testTerminalUser(&db, "bot1");
+    try db.terminalInvite(id, .{ .kind = .bot, .nodes = "*", .run_as = "tgbot", .grant_exp = t0 + 60 }, &th, t0 + 10, t0);
     // An invitation that is not used in time expires
-    try testing.expect((try db.personByToken(a, &th, t0 + 10)) == null);
-    try db.personRedeem(id, "UBOT", "JTIB", "x", null, t0 + 60);
+    try testing.expect((try db.terminalByToken(a, &th, t0 + 10)) == null);
+    try db.terminalRedeem(id, "UBOT", "JTIB", "x", null, t0 + 60);
     try testing.expectEqual(Db.UseResult.allowed, try db.grantUse("JTIB", "gw1", "B1", "UBOT", t0 + 59));
     try testing.expectEqualStrings("access expired", (try db.grantUse("JTIB", "gw1", "B2", "UBOT", t0 + 60)).denied);
 
-    try db.personRevoke(id);
-    try testing.expect((try db.personByKey(a, "UBOT")) == null);
+    // Without terminal:connect (the role taken), or blocked: no connecting
+    try db.userRevoke(id, (try db.roleList(a))[2].id);
+    try testing.expect((try db.terminalByKey(a, "UBOT")) == null);
     try testing.expectEqualStrings("access revoked", (try db.grantUse("JTIB", "gw1", "B3", "UBOT", t0)).denied);
+    try testing.expectEqualStrings("UBOT", (try db.terminalKeysDenied(a))[0]);
+    try db.userGrant(id, (try db.roleList(a))[2].id);
+    try testing.expect((try db.terminalByKey(a, "UBOT")) != null);
+    try db.userSetDisabled(id, true);
+    try testing.expect((try db.terminalByKey(a, "UBOT")) == null);
+    try db.userSetDisabled(id, false);
+
+    try db.terminalRevoke(id);
+    try testing.expect((try db.terminalByKey(a, "UBOT")) == null);
+    try testing.expectEqualStrings("access revoked", (try db.grantUse("JTIB", "gw1", "B3", "UBOT", t0)).denied);
+    // A new invitation gives access again, with a new key
+    try db.terminalInvite(id, .{ .nodes = "*", .run_as = "tgbot", .max_uses = 1 }, &tokenHash("INV3"), t0 + 10, t0);
+    try testing.expect((try db.terminalByToken(a, &tokenHash("INV3"), t0)) != null);
 }
 
-test "invitations need valid patterns and a limit" {
+test "terminal access needs valid patterns and a limit" {
     var db = try testDb();
     defer db.close();
     const th = tokenHash("X");
-    try testing.expectError(error.InvalidSpec, db.personInvite(.{ .name = "x", .nodes = "ist-*", .run_as = "root", .max_uses = 1 }, &th, t0 + 1, t0));
-    try testing.expectError(error.InvalidSpec, db.personInvite(.{ .name = "x", .nodes = "ist_*", .run_as = "root" }, &th, t0 + 1, t0));
-    try testing.expectError(error.InvalidSpec, db.personInvite(.{ .name = "x", .nodes = "ist_*", .run_as = "", .max_uses = 1 }, &th, t0 + 1, t0));
-    try testing.expectError(error.InvalidSpec, db.personInvite(.{ .name = "", .nodes = "ist_*", .run_as = "root", .max_uses = 1 }, &th, t0 + 1, t0));
+    const id = try testTerminalUser(&db, "xx");
+    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{ .nodes = "ist-*", .run_as = "root", .max_uses = 1 }, &th, t0 + 1, t0));
+    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{ .nodes = "ist_*", .run_as = "root" }, &th, t0 + 1, t0));
+    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{ .nodes = "ist_*", .run_as = "", .max_uses = 1 }, &th, t0 + 1, t0));
+    try testing.expectError(error.NotFound, db.terminalInvite(999, .{ .nodes = "ist_*", .run_as = "root", .max_uses = 1 }, &th, t0 + 1, t0));
+}
+
+test "people of an older database become users" {
+    var db = try testDb();
+    defer db.close();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // The old shape: a person table, grants by person
+    try db.exec("DROP TABLE grantRecord");
+    try db.exec("CREATE TABLE person (personId INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, userKey TEXT UNIQUE, tokenHash TEXT UNIQUE, tokenExpires INTEGER, nodes TEXT NOT NULL, runAs TEXT NOT NULL, maxUses INTEGER, grantExp INTEGER, revoked INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL)");
+    try db.exec("CREATE TABLE grantRecord (jti TEXT PRIMARY KEY, personId INTEGER NOT NULL REFERENCES person(personId) ON DELETE CASCADE, token TEXT NOT NULL, maxUses INTEGER, uses INTEGER NOT NULL DEFAULT 0, exp INTEGER, revoked INTEGER NOT NULL DEFAULT 0)");
+    try db.exec("insert into person(personId, name, kind, userKey, nodes, runAs, maxUses, created) values(7, 'Veli Kaya', 'human', 'UVELI', 'ist_*', 'root', 5, 1), (8, 'Veli Kaya', 'bot', null, '*', 'bot', 1, 2)");
+    try db.exec("insert into grantRecord(jti, personId, token, maxUses, uses) values('J7', 7, 'g', 5, 3)");
+    _ = try db.userCreate("veli_kaya", false, "h", 1);
+    try db.initSchema();
+    // Named as user names go, unique; the access and its grant kept
+    const t = (try db.terminalByKey(a, "UVELI")).?;
+    try testing.expectEqualStrings("veli_kaya_2", t.name);
+    try testing.expectEqual(@as(?i64, 3), t.uses);
+    try testing.expectEqual(Db.UseResult.allowed, try db.grantUse("J7", "ist_gw1", "M1", "UVELI", t0));
+    try testing.expect((try db.userByName(a, "veli_kaya_3")) != null);
+    try testing.expect(!try db.has("select 1 from sqlite_master where name = 'person'"));
+    try testing.expectEqualStrings("u_9x", try Db.userNameFrom(a, "9x"));
 }
 
 test "settings and session logs" {
@@ -1779,19 +1981,24 @@ test "roles, their rights and the roles of users" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    // A new database has the roles admin (every right) and auditor
+    // A new database has the roles admin (every right but connecting to
+    // nodes), auditor (reading) and terminal_user (connecting)
     const seeded = try db.roleList(a);
-    try testing.expectEqual(@as(usize, 2), seeded.len);
+    try testing.expectEqual(@as(usize, 3), seeded.len);
     try testing.expectEqualStrings("admin", seeded[0].name);
+    try testing.expectEqualStrings("terminal_user", seeded[2].name);
     var all: usize = 0;
     for (rights.modules) |m| all += m.actions.len;
-    try testing.expectEqual(all, (try db.roleRights(a, 1)).len);
+    try testing.expectEqual(all - 1, (try db.roleRights(a, 1)).len);
+    try testing.expect(!rights.has(try db.roleRights(a, 1), "terminal", "connect"));
     try testing.expect(!rights.has(try db.roleRights(a, 2), "node", "insert"));
+    try testing.expect(rights.has(try db.roleRights(a, 2), "panel", "login"));
+    try testing.expectEqualStrings("terminal:connect", (try db.roleRights(a, seeded[2].id))[0]);
 
     try testing.expectError(error.InvalidName, db.roleInsert("1x", "", &.{}));
     try testing.expectError(error.Duplicate, db.roleInsert("admin", "", &.{}));
     try testing.expectError(error.InvalidRight, db.roleInsert("clerk", "", &.{"user:fly"}));
-    try testing.expect(try db.roleGet(a, 3) == null);
+    try testing.expect(try db.roleGet(a, 4) == null);
     const clerk = try db.roleInsert("clerk", "Looks at users", &.{"user:browse"});
     try db.roleUpdate(clerk, "clerk", "Users and roles", &.{ "user:browse", "role:browse" });
     try testing.expectEqual(@as(usize, 2), (try db.roleRights(a, clerk)).len);
@@ -1857,7 +2064,8 @@ test "rights from before the split: each role keeps what it could do" {
     try db.exec("ALTER TABLE webSession DROP COLUMN effectiveUserId");
     try db.exec("delete from roleRight where roleId = 1 and module in ('user', 'role', 'profile')");
     const clerk = try db.roleInsert("clerk", "", &.{ "user:browse", "user:update", "role:update" });
-    try db.exec("insert into roleRight(roleId, module, action) values(1, 'user', 'roles'), (3, 'user', 'roles')");
+    try db.exec("insert into roleRight(roleId, module, action) values(1, 'user', 'roles')");
+    try db.exec(try std.fmt.allocPrintSentinel(a, "insert into roleRight(roleId, module, action) values({d}, 'user', 'roles')", .{clerk}, 0));
     try db.initSchema();
     const r = try db.roleRights(a, clerk);
     for ([_][]const u8{ "user:role_browse", "user:role_grant", "user:role_revoke", "role:role_right", "user:update_pass", "profile:update_password" }) |want|

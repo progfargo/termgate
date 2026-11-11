@@ -69,13 +69,13 @@ pub const Reply = struct { status: std.http.Status = .ok, body: []const u8 };
 /// made it (see record).
 pub fn changes(name: []const u8) bool {
     if (rpc_mod.changes(name)) return true;
-    inline for (.{ "svc.endSession", "svc.kickNode", "svc.kickUser", "users.create", "users.update", "users.reset", "users.delete", "users.grant", "users.revoke", "users.select", "users.unselect", "nodes.create", "nodes.newKey", "people.invite", "roles.insert", "roles.update", "roles.rights", "roles.delete", "profile.password" }) |n| {
+    inline for (.{ "svc.endSession", "svc.kickNode", "svc.kickUser", "users.create", "users.update", "users.reset", "users.delete", "users.grant", "users.revoke", "users.select", "users.unselect", "nodes.create", "nodes.newKey", "terminal.invite", "terminal.revoke", "roles.insert", "roles.update", "roles.rights", "roles.delete", "profile.password" }) |n| {
         if (std.mem.eql(u8, name, n)) return true;
     }
     return false;
 }
 
-/// What a changing call is about, in words: the node, person or user it
+/// What a changing call is about, in words: the node or user it
 /// names. Looked up before the call runs (afterwards a deleted node has
 /// no name any more). Only names and ids are taken from the arguments:
 /// profile.password carries passwords, which are never recorded.
@@ -111,13 +111,10 @@ pub fn describe(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const
     if (v != .array or v.array.items.len == 0) return "";
     const first = v.array.items[0];
     const is_node = std.mem.startsWith(u8, name, "db.node");
-    const is_person = std.mem.startsWith(u8, name, "db.person");
-    if (first == .integer and (is_node or is_person)) {
+    if (first == .integer and is_node) {
         p.rpc.lock.lockUncancelable(p.io);
         defer p.rpc.lock.unlock(p.io);
-        if (is_node) {
-            if (p.rpc.db.nodeGet(a, first.integer) catch null) |n| return n.name;
-        } else if (p.rpc.db.personGet(a, first.integer) catch null) |x| return x.name;
+        if (p.rpc.db.nodeGet(a, first.integer) catch null) |n| return n.name;
         return std.fmt.allocPrint(a, "id {d}", .{first.integer}) catch "";
     }
     if (first == .string) {
@@ -127,7 +124,7 @@ pub fn describe(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const
         return first.string;
     }
     if (first == .object) {
-        // db.personInvite: the invitation; db.settingsSet: the settings
+        // db.settingsSet: the settings
         if (first.object.get("name")) |n| if (n == .string) return n.string;
         return std.json.Stringify.valueAlloc(a, first, .{}) catch "";
     }
@@ -152,8 +149,20 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
         .forbidden => err(.forbidden, "no right"),
         .bad_request => err(.bad_request, "bad arguments"),
     };
-    if (std.mem.eql(u8, name, "nodes.create") or std.mem.eql(u8, name, "nodes.newKey") or std.mem.eql(u8, name, "people.invite"))
+    if (std.mem.eql(u8, name, "nodes.create") or std.mem.eql(u8, name, "nodes.newKey") or std.mem.eql(u8, name, "terminal.invite"))
         return try keyCall(p, a, name, body, who, now);
+    if (std.mem.eql(u8, name, "terminal.revoke")) {
+        if (!who.can("user", "access")) return err(.forbidden, "no right");
+        const Req = struct { id: i64 = 0 };
+        const req = std.json.parseFromSliceLeaky(Req, a, body, .{ .ignore_unknown_fields = true }) catch return err(.bad_request, "bad arguments");
+        {
+            p.rpc.lock.lockUncancelable(p.io);
+            defer p.rpc.lock.unlock(p.io);
+            p.rpc.db.terminalRevoke(req.id) catch |e| return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .err = @errorName(e) }, .{}) };
+        }
+        enforceTerminal(p);
+        return .{ .body = "{\"ok\":null}" };
+    }
     if (std.mem.eql(u8, name, "relay.info")) {
         return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .ok = .{
             .host = p.relay_host,
@@ -253,13 +262,13 @@ const node_key_lifetime_s = 24 * 3600;
 /// An invitation lasts this long unless used
 const invitation_lifetime_s = 7 * 86400;
 
-/// nodes.create {name, description}, nodes.newKey {id}, people.invite
-/// {name, bot, nodes: [...], run_as, uses, days}: a node key or an
-/// invitation, made here: a random token, of which only the hash is
+/// nodes.create {name, description}, nodes.newKey {id}, terminal.invite
+/// {id (the user), bot, nodes: [...], run_as, uses, days}: a node key or
+/// an invitation, made here: a random token, of which only the hash is
 /// stored; the text (tg1-<relay>-<CA fingerprint>-<token>) is answered
 /// once, to be handed over.
 fn keyCall(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8, who: *const Caller, now: i64) !Reply {
-    const invite = std.mem.eql(u8, name, "people.invite");
+    const invite = std.mem.eql(u8, name, "terminal.invite");
     if (!(if (invite) who.can("user", "access") else who.can("node", "insert"))) return err(.forbidden, "no right");
     const Req = struct {
         id: i64 = 0,
@@ -298,15 +307,32 @@ fn keyCall(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8, 
         return answer.ok(a, req.id, text);
     }
     if (req.uses == null and req.days == null) return .{ .body = "{\"err\":\"InvalidSpec\"}" };
-    const id = db.personInvite(.{
-        .name = std.mem.trim(u8, req.name, " "),
+    db.terminalInvite(req.id, .{
         .kind = if (req.bot) .bot else .human,
         .nodes = std.mem.join(a, ",", req.nodes) catch return error.OutOfMemory,
         .run_as = std.mem.trim(u8, req.run_as, " "),
         .max_uses = req.uses,
         .grant_exp = if (req.days) |d| now + @as(i64, d) * 86400 else null,
     }, &th, now + invitation_lifetime_s, now) catch |e| return answer.dbErr(a, e);
-    return answer.ok(a, id, text);
+    return answer.ok(a, req.id, text);
+}
+
+/// Closes the connections of users who may not connect any more: their
+/// access revoked, blocked, or without terminal:connect (a role taken, a
+/// role's rights changed). Called after every change made in the panel.
+pub fn enforceTerminal(p: *Panel) void {
+    var arena: std.heap.ArenaAllocator = .init(p.gpa);
+    defer arena.deinit();
+    const keys = blk: {
+        p.rpc.lock.lockUncancelable(p.io);
+        defer p.rpc.lock.unlock(p.io);
+        break :blk p.rpc.db.terminalKeysDenied(arena.allocator()) catch return;
+    };
+    if (keys.len == 0) return;
+    p.lock.lockUncancelable(p.io);
+    defer p.lock.unlock(p.io);
+    const s = p.service orelse return;
+    for (keys) |k| s.kickUser(k);
 }
 
 test "changing calls are known and described in words" {
@@ -331,7 +357,6 @@ test "changing calls are known and described in words" {
     try testing.expectEqualStrings("pump07", describe(&p, a, "db.nodeDelete", "[1]"));
     try testing.expectEqualStrings("id 9", describe(&p, a, "db.nodeDelete", "[9]"));
     try testing.expectEqualStrings("gw02", describe(&p, a, "db.nodeCreate", "[\"gw02\",\"\",\"h\",1,1]"));
-    try testing.expectEqualStrings("Ali", describe(&p, a, "db.personInvite", "[{\"name\":\"Ali\",\"nodes\":\"*\",\"run_as\":\"root\"},\"h\",1,1]"));
     try testing.expectEqualStrings("session S1 on pump07", describe(&p, a, "svc.endSession", "[\"pump07\",\"UKEY\",\"S1\"]"));
     try testing.expectEqualStrings("veli", describe(&p, a, "users.create", "{\"name\":\"veli\"}"));
     const uid = try db.userCreate("veli", false, "h", 1);
@@ -374,9 +399,16 @@ test "node keys and invitations are made on the server" {
     try testing.expectEqual(ans.ok.id, (try db.nodeByToken(a, &dbm.tokenHash(code.token), 1000)).?.id);
     try testing.expectEqualStrings("{\"err\":\"Duplicate\"}", (try call(&p, a, "nodes.create", "{\"name\":\"gw01\"}", admin, 1000)).?.body);
 
-    // An invitation needs uses, days or both
-    try testing.expectEqualStrings("{\"err\":\"InvalidSpec\"}", (try call(&p, a, "people.invite", "{\"name\":\"Ali\",\"nodes\":[\"gw*\"],\"run_as\":\"root\"}", admin, 1000)).?.body);
-    const inv = try std.json.parseFromSliceLeaky(Answer, a, (try call(&p, a, "people.invite", "{\"name\":\"Ali\",\"nodes\":[\"gw*\",\"pump?\"],\"run_as\":\"root\",\"uses\":2}", admin, 1000)).?.body, .{});
-    const person = (try db.personByToken(a, &dbm.tokenHash((try core.code.parse(inv.ok.code)).token), 1000)).?;
-    try testing.expectEqualStrings("gw*,pump?", person.nodes);
+    // Terminal access for a user: needs uses, days or both
+    const ali = try db.userCreate("ali", false, "!", 1000);
+    try db.userGrant(ali, (try db.roleList(a))[2].id);
+    const ali_body = try std.fmt.allocPrint(a, "{{\"id\":{d},\"nodes\":[\"gw*\",\"pump?\"],\"run_as\":\"root\"", .{ali});
+    try testing.expectEqualStrings("{\"err\":\"InvalidSpec\"}", (try call(&p, a, "terminal.invite", try std.mem.concat(a, u8, &.{ ali_body, "}" }), admin, 1000)).?.body);
+    const inv = try std.json.parseFromSliceLeaky(Answer, a, (try call(&p, a, "terminal.invite", try std.mem.concat(a, u8, &.{ ali_body, ",\"uses\":2}" }), admin, 1000)).?.body, .{});
+    const t = (try db.terminalByToken(a, &dbm.tokenHash((try core.code.parse(inv.ok.code)).token), 1000)).?;
+    try testing.expectEqualStrings("gw*,pump?", t.nodes);
+    try testing.expectEqualStrings("ali", t.name);
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&p, a, "terminal.revoke", try std.fmt.allocPrint(a, "{{\"id\":{d}}}", .{ali}), reader, 1000)).?.status);
+    try testing.expectEqualStrings("{\"ok\":null}", (try call(&p, a, "terminal.revoke", try std.fmt.allocPrint(a, "{{\"id\":{d}}}", .{ali}), admin, 1000)).?.body);
+    try testing.expect((try db.terminalGet(a, ali)).?.revoked);
 }

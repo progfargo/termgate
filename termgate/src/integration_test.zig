@@ -122,15 +122,25 @@ test "online and offline follow the node's connection, without heartbeats" {
     try waitOnline(&f, id, false);
 }
 
+/// A user with the role terminal_user (connects to nodes).
+fn terminalUser(db: *dbm.Db, name: []const u8) !i64 {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const id = try db.userCreate(name, false, "!", now());
+    for (try db.roleList(arena.allocator())) |r| if (std.mem.eql(u8, r.name, "terminal_user")) try db.userGrant(id, r.id);
+    return id;
+}
+
 /// An open session in termgate's database with known end-to-end keys, as if
-/// termgate had approved it. `tag` makes the person and grant unique.
+/// termgate had approved it. `tag` makes the user and grant unique.
 fn addSession(f: *Fixture, comptime tag: []const u8, node: []const u8, user: []const u8, sid: []const u8, started: i64) !core.e2e.Keys {
     const keys: core.e2e.Keys = .{ .up = @splat(0x41), .down = @splat(0x42) };
     f.lock.lockUncancelable(testing.io);
     defer f.lock.unlock(testing.io);
     const th = dbm.tokenHash("tok-" ++ tag);
-    const pid = try f.db.personInvite(.{ .name = "P-" ++ tag, .nodes = "*", .run_as = "root", .max_uses = 5 }, &th, now() + 60, now());
-    try f.db.personRedeem(pid, user, "JTI-" ++ tag, "<grant>", 5, null);
+    const uid = try terminalUser(&f.db, "u-" ++ tag);
+    try f.db.terminalInvite(uid, .{ .nodes = "*", .run_as = "root", .max_uses = 5 }, &th, now() + 60, now());
+    try f.db.terminalRedeem(uid, user, "JTI-" ++ tag, "<grant>", 5, null);
     _ = try f.db.grantUse("JTI-" ++ tag, node, sid, user, started);
     try f.db.sessionSetKeys(sid, keys);
     return keys;
@@ -380,7 +390,7 @@ test "registration, status, invitation, approvals with max_uses, audit" {
     {
         f.lock.lockUncancelable(testing.io);
         defer f.lock.unlock(testing.io);
-        _ = try f.db.personInvite(.{ .name = "Ali", .nodes = "box*", .run_as = "root", .max_uses = 1 }, &inv_th, now() + 3600, now());
+        try f.db.terminalInvite(try terminalUser(&f.db, "ali"), .{ .nodes = "box*", .run_as = "root", .max_uses = 1 }, &inv_th, now() + 3600, now());
     }
     const ali = try KeyPair.fromRawSeed(.user, @splat(0x74));
     const ali_pub = ali.publicKey().encode();
@@ -448,7 +458,7 @@ test "registration, status, invitation, approvals with max_uses, audit" {
         defer f.lock.unlock(testing.io);
         const sessions = try f.db.sessionsRecent(ar, 10);
         try testing.expectEqual(@as(usize, 1), sessions.len);
-        try testing.expectEqualStrings("Ali", sessions[0].person);
+        try testing.expectEqualStrings("ali", sessions[0].user);
         try testing.expectEqual(@as(?i64, 1), sessions[0].ended);
     }
 }
@@ -481,29 +491,30 @@ test "strangers get only the CA; revoked access closes the connection" {
     try testing.expect(std.mem.indexOf(u8, c.lastError(), "Permissions Violation") != null);
     try testing.expectError(error.ServerRejected, f.connect(stranger, "not-a-code", &inbox));
 
-    // Revoking a person's access closes their open connection, and the
+    // Revoking a user's terminal access closes its open connection, and the
     // callout refuses them afterwards
     const th = dbm.tokenHash("TOK");
     const bob = try KeyPair.fromRawSeed(.user, @splat(0x76));
     {
         f.lock.lockUncancelable(testing.io);
         defer f.lock.unlock(testing.io);
-        const id = try f.db.personInvite(.{ .name = "Bob", .nodes = "*", .run_as = "root", .max_uses = 1 }, &th, now() + 60, now());
-        try f.db.personRedeem(id, &bob.publicKey().encode(), "JTIBOB", "x", 1, null);
+        const id = try terminalUser(&f.db, "bob");
+        try f.db.terminalInvite(id, .{ .nodes = "*", .run_as = "root", .max_uses = 1 }, &th, now() + 60, now());
+        try f.db.terminalRedeem(id, &bob.publicKey().encode(), "JTIBOB", "x", 1, null);
     }
     const ok = try f.connect(bob, null, &inbox);
     defer ok.close();
     {
         f.lock.lockUncancelable(testing.io);
         defer f.lock.unlock(testing.io);
-        const p = (try f.db.personByKey(a, &bob.publicKey().encode())).?;
+        const p = (try f.db.terminalByKey(a, &bob.publicKey().encode())).?;
         defer {
             a.free(p.name);
             a.free(p.nodes);
             a.free(p.run_as);
             a.free(p.user_key.?);
         }
-        try f.db.personRevoke(p.id);
+        try f.db.terminalRevoke(p.id);
     }
     f.service.kickUser(&bob.publicKey().encode());
     try waitClosed(ok);

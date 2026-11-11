@@ -22,6 +22,9 @@ const update: Action = .{ .name = "update", .title = "Update" };
 const delete: Action = .{ .name = "delete", .title = "Delete" };
 
 pub const modules = [_]Module{
+    // Signing in to this panel; a user without it (a terminal user, a bot)
+    // cannot
+    .{ .name = "panel", .title = "Panel", .actions = &.{.{ .name = "login", .title = "Sign in" }} },
     .{ .name = "node", .title = "Nodes", .actions = &.{ browse, insert, update, delete } },
     .{ .name = "session", .title = "Sessions", .actions = &.{
         browse,
@@ -56,6 +59,9 @@ pub const modules = [_]Module{
         .{ .name = "update_password", .title = "Change own password" },
     } },
     .{ .name = "config", .title = "Configuration", .actions = &.{ browse, update } },
+    // Opening terminal sessions on nodes with tgterm (the user's terminal
+    // access says which nodes and as whom)
+    .{ .name = "terminal", .title = "Terminal", .actions = &.{.{ .name = "connect", .title = "Connect to nodes" }} },
 };
 
 /// Is module:action in the list above.

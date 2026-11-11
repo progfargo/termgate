@@ -36,8 +36,6 @@ const DbCall = struct {
 const db_calls = [_]DbCall{
     .{ .name = "nodeList", .module = "node", .action = "browse" },
     .{ .name = "nodeGet", .module = "node", .action = "browse" },
-    .{ .name = "personList", .module = "user", .action = "browse" },
-    .{ .name = "personGet", .module = "user", .action = "browse" },
     .{ .name = "sessionsActive", .module = "session", .action = "browse" },
     .{ .name = "sessionsRecent", .module = "session", .action = "browse" },
     .{ .name = "sessionsOfNode", .module = "session", .action = "browse" },
@@ -49,8 +47,6 @@ const db_calls = [_]DbCall{
     .{ .name = "nodeReject", .module = "node", .action = "update", .changes = true },
     .{ .name = "nodeSetDisabled", .module = "node", .action = "update", .changes = true },
     .{ .name = "nodeDelete", .module = "node", .action = "delete", .changes = true },
-    .{ .name = "personInvite", .module = "user", .action = "access", .changes = true },
-    .{ .name = "personRevoke", .module = "user", .action = "access", .changes = true },
     .{ .name = "settingsSet", .module = "config", .action = "update", .changes = true },
 };
 

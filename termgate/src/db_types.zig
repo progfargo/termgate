@@ -1,6 +1,5 @@
 //! The data termgate's database holds, as the rest of termgate sees it:
-//! the types and error sets, without SQLite. The server's database (db.zig)
-//! and the web panel's stand-in for it (web/remote_db.zig) share them.
+//! the types and error sets, without SQLite.
 
 const std = @import("std");
 const core = @import("core");
@@ -18,8 +17,13 @@ pub const NodeState = enum {
     disabled,
 };
 
-pub const Person = struct {
+/// A user's terminal access: the grant spec an admin chose when giving it
+/// (tgterm --invite), and the user's key once the invitation is used.
+/// Connecting also needs the right terminal:connect from the user's roles.
+pub const Terminal = struct {
+    /// The user's id
     id: i64,
+    /// The user's name
     name: []const u8,
     kind: core.grant.Kind,
     /// Set once the invitation is used
@@ -41,7 +45,8 @@ pub const Session = struct {
     sid: []const u8,
     node: []const u8,
     user_key: []const u8,
-    person: []const u8,
+    /// The user's name
+    user: []const u8,
     grant_jti: []const u8,
     started: i64,
     ended: ?i64,
@@ -145,16 +150,16 @@ pub const Action = struct {
     user: []const u8,
     /// The API call, e.g. "db.nodeDelete", "svc.endSession", "login"
     call: []const u8,
-    /// What it was about: a node, a person, a user, a session
+    /// What it was about: a node, a user, a session
     detail: []const u8,
     ok: bool,
 };
 
 pub const NodeError = error{ InvalidName, Duplicate, NotFound, WrongState } || Error;
-pub const PersonError = error{ InvalidSpec, NotFound, Duplicate } || Error;
+pub const TerminalError = error{ InvalidSpec, NotFound, Duplicate } || Error;
 
-pub const Invitation = struct {
-    name: []const u8,
+/// What terminal access a user gets (the grant's spec).
+pub const TerminalSpec = struct {
     kind: core.grant.Kind = .human,
     /// Node name patterns, comma separated ("ist_*,pump??")
     nodes: []const u8,

@@ -208,7 +208,11 @@ fn call(state: *State, req: *std.http.Server.Request, a: std.mem.Allocator, name
     const recorded = who != null and panel_mod.changes(name);
     const detail = if (recorded) panel_mod.describe(state.panel, a, name, body) else "";
     if (try auth_mod.call(state.auth, a, name, body, token, now)) |r| {
-        if (recorded) panel_mod.record(state.panel, now, who.?.auditName(a), name, detail, r.status == .ok);
+        if (recorded) {
+            panel_mod.record(state.panel, now, who.?.auditName(a), name, detail, r.status == .ok);
+            // A change may take a user's right to connect to nodes
+            if (r.status == .ok) panel_mod.enforceTerminal(state.panel);
+        }
         // Sign-ins are recorded too, the failed ones with the name tried
         if (std.mem.eql(u8, name, "login") and r.status != .ok) panel_mod.record(state.panel, now, "", name, signInName(a, body), false);
         // Built without the second step, the password alone signs in
@@ -236,6 +240,7 @@ fn call(state: *State, req: *std.http.Server.Request, a: std.mem.Allocator, name
     };
     if (try panel_mod.call(state.panel, a, name, body, &user, now)) |r| {
         if (recorded) panel_mod.record(state.panel, now, user.auditName(a), name, detail, r.status == .ok and !std.mem.startsWith(u8, r.body, "{\"err\""));
+        if (recorded and r.status == .ok) panel_mod.enforceTerminal(state.panel);
         const out = try answerFor(a, panel_path, r.status, r.body);
         return req.respond(out.body, .{ .status = out.status, .extra_headers = &.{json} });
     }

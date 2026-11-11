@@ -11,7 +11,7 @@
 //!   - the system connection (termgate's user in the SYS account) follows
 //!     connections coming and going in that account (which nodes are online;
 //!     nodes send no heartbeat) and closes the connection of a node that is
-//!     disabled or deleted and of a person whose access is revoked.
+//!     disabled or deleted and of a user who may not connect any more.
 //!
 //! Every decision reads the database. The UI uses the same database; all
 //! access from here goes through `lock`, which the UI must hold as well.
@@ -260,16 +260,16 @@ pub const Service = struct {
             const id = core.code.tokenId(tok);
             if (try s.db.nodeByToken(a, &hash, s.now())) |_|
                 return .{ .allow = .{ .name = "registering", .account = account, .permissions = try core.perms.registering(a, &id, k) } };
-            if (try s.db.personByToken(a, &hash, s.now())) |_|
+            if (try s.db.terminalByToken(a, &hash, s.now())) |_|
                 return .{ .allow = .{ .name = "invited", .account = account, .permissions = try core.perms.redeeming(a, &id, k) } };
             return .{ .deny = "unknown, used or expired code" };
         }
         // The name shows in the relay's connection list, where termgate finds
         // connections to mark online or to close: node:<name> (unique) and
-        // user:<key> (person names need not be unique)
+        // user:<key>; only users who may connect (terminal:connect)
         if (try s.db.nodeByKey(a, k)) |n|
             return .{ .allow = .{ .name = try std.fmt.allocPrint(a, "{s}{s}", .{ node_prefix, n.name }), .account = account, .permissions = try core.perms.node(a, n.name) } };
-        if (try s.db.personByKey(a, k)) |_|
+        if (try s.db.terminalByKey(a, k)) |_|
             return .{ .allow = .{ .name = try std.fmt.allocPrint(a, "{s}{s}", .{ user_prefix, k }), .account = account, .permissions = try core.perms.user(a, k) } };
         return .{ .allow = .{ .name = "anonymous", .account = account, .permissions = try core.perms.anonymous(a, k) } };
     }
@@ -292,8 +292,9 @@ pub const Service = struct {
         s.kickLater(node_prefix, name);
     }
 
-    /// Closes the connections of the person with `key` (revoked) and ends
-    /// their open sessions on the nodes (the nodes report the ends).
+    /// Closes the connections of the user with `key` (who may not connect
+    /// any more) and ends its open sessions on the nodes (the nodes report
+    /// the ends).
     pub fn kickUser(s: *Service, key: []const u8) void {
         var arena: std.heap.ArenaAllocator = .init(s.gpa);
         defer arena.deinit();
@@ -675,7 +676,7 @@ pub const Service = struct {
 
         s.lock.lockUncancelable(s.io);
         defer s.lock.unlock(s.io);
-        const p = (try s.db.personByTokenId(a, lastToken(m.subject), s.now())) orelse
+        const p = (try s.db.terminalByTokenId(a, lastToken(m.subject), s.now())) orelse
             return s.reply(m, "{\"error\":\"unknown, used or expired invitation\"}");
 
         var patterns: std.ArrayList([]const u8) = .empty;
@@ -692,7 +693,7 @@ pub const Service = struct {
             .exp = p.grant_exp,
         }, s.now());
         const parsed = try core.jwt.decode(a, core.grant.GrantClaims, g, s.now());
-        try s.db.personRedeem(p.id, req.user_key, parsed.value.jti.?, g, max_uses, p.grant_exp);
+        try s.db.terminalRedeem(p.id, req.user_key, parsed.value.jti.?, g, max_uses, p.grant_exp);
         log.info("invitation used by {s}", .{p.name});
         try s.reply(m, try std.json.Stringify.valueAlloc(a, .{ .grant = g }, .{}));
     }

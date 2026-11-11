@@ -1,0 +1,14 @@
+.{
+    .name = .tgnode,
+    .version = "0.0.0",
+    .fingerprint = 0xae5872702a7f7976, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.17.1",
+    .dependencies = .{
+        .core = .{ .path = "../lib/core" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

@@ -1,0 +1,14 @@
+.{
+    .name = .tgterm,
+    .version = "0.0.0",
+    .fingerprint = 0x8e287db87f5c467a, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.17.1",
+    .dependencies = .{
+        .core = .{ .path = "../lib/core" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

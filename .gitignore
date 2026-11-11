@@ -1,0 +1,10 @@
+# Zig build output and cache
+.zig-cache/
+zig-out/
+# Dependencies from build.zig.zon (zig build fetches them again)
+zig-pkg/
+# termgate's data when run from the source tree (database, keys, CA, relay
+# kit): never in the repository
+termgate/data/
+# Instructions for Claude Code, kept locally
+CLAUDE.md

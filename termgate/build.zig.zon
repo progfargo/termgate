@@ -1,0 +1,25 @@
+.{
+    .name = .termgate,
+    .version = "0.0.0",
+    .fingerprint = 0x2a917bff09ff5129, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.17.1",
+    .dependencies = .{
+        .lvgl = .{
+            .url = "https://github.com/lvgl/lvgl/archive/refs/tags/v9.6.0.tar.gz",
+            .hash = "N-V-__8AAEV6mgvY3hT-LmCZsLpBhxSxreIJQ6gb0JVt4I6q",
+        },
+        .sqlite = .{
+            .url = "https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip",
+            .hash = "N-V-__8AAETTsABEodUZZFAyfdAm9hEyqBXuLw9pRSO0vFh9",
+        },
+        .core = .{ .path = "../lib/core" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "lvconf",
+        "assets",
+        "web",
+    },
+}

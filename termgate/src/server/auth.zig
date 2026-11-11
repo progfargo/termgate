@@ -1,0 +1,615 @@
+//! The panel's sign-in and user calls (POST /api/<name>, JSON).
+//!
+//! Signing in takes two steps: `login` (name and password) gives a pending
+//! session, `login2` (a code from the authenticator app) makes it full.
+//! A user that has not set up its second step yet gets a new secret
+//! from `login` and confirms it with its first code. Wrong passwords and
+//! codes count together; from the fifth in a row the user is locked for
+//! a growing time (db.userFailed).
+//!
+//! Users are made by users who may (`users.create` returns a password to
+//! hand over); there is no sign-up and no password recovery, and termgate
+//! sends no e-mail. `users.reset` gives a user a new password and
+//! makes it set up its second step again; `profile.password` changes
+//! one's own.
+//!
+//! What a user may do comes from its roles: a role is a set of rights
+//! (rights.zig), made and changed with `roles.*` and given to users with
+//! `users.grant`. The rules are our earlier project's:
+//! - The superuser (the first user, made by `termgate init`) has every
+//!   right; nobody can change, block, delete it, reset its password or
+//!   give or take its roles. It changes its own password in its profile.
+//! - The role admin cannot be deleted; only the superuser changes it.
+//! - The last user with the role admin cannot be deleted, nor lose it.
+//! - `users.select` lets a user act as another (to see the panel as that
+//!   user does): the other's rights apply until `users.unselect`. Both
+//!   are checked against the signed-in user's own rights. Only the
+//!   superuser may act as the superuser.
+
+const std = @import("std");
+const Io = std.Io;
+const dbm = @import("db");
+const users = @import("users");
+/// false: built with -Dsecond-step=false, the password alone signs in
+pub const second_step = @import("build_options").second_step;
+
+/// A pending session (password given, code not yet) lives this long.
+const pending_s = 5 * 60;
+/// A full session lives this long, whatever its use.
+const session_s = 12 * 3600;
+
+pub const Auth = struct {
+    gpa: std.mem.Allocator,
+    io: Io,
+    db: *dbm.Db,
+    lock: *Io.Mutex,
+    cost: users.Cost = users.default_cost,
+};
+
+pub const Reply = struct {
+    status: std.http.Status = .ok,
+    /// JSON, in the call's arena
+    body: []const u8,
+    /// A new session token to set as the cookie
+    set_token: ?[]const u8 = null,
+    token_max_age: i64 = 0,
+    /// The cookie is to be removed
+    clear_token: bool = false,
+};
+
+/// Who is calling: the user of a full session, with its rights; when it
+/// acts as another user (users.select), that user.
+pub const Caller = struct {
+    id: i64,
+    name: []const u8,
+    is_superuser: bool = false,
+    /// "module:action", from the user's roles
+    rights: []const []const u8 = &.{},
+    /// The signed-in user, when it acts as the user above
+    real: ?Real = null,
+
+    pub const Real = struct { id: i64, name: []const u8, is_superuser: bool, rights: []const []const u8 };
+
+    pub fn can(c: *const Caller, module: []const u8, action: []const u8) bool {
+        return c.is_superuser or dbm.rights.has(c.rights, module, action);
+    }
+
+    /// A right of the signed-in user itself, not of the one it acts as.
+    pub fn realCan(c: *const Caller, module: []const u8, action: []const u8) bool {
+        const r = c.real orelse return c.can(module, action);
+        return r.is_superuser or dbm.rights.has(r.rights, module, action);
+    }
+
+    /// The signed-in user's own id.
+    pub fn realId(c: *const Caller) i64 {
+        return if (c.real) |r| r.id else c.id;
+    }
+
+    /// Who did it, for the audit: "erdem" or "erdem as veli".
+    pub fn auditName(c: *const Caller, a: std.mem.Allocator) []const u8 {
+        const r = c.real orelse return c.name;
+        return std.fmt.allocPrint(a, "{s} as {s}", .{ r.name, c.name }) catch c.name;
+    }
+};
+
+fn json(a: std.mem.Allocator, v: anytype) ![]const u8 {
+    return std.json.Stringify.valueAlloc(a, v, .{});
+}
+
+fn fail(a: std.mem.Allocator, status: std.http.Status, comptime code: []const u8) !Reply {
+    return .{ .status = status, .body = try json(a, .{ .@"error" = code }) };
+}
+
+/// The user of `token`'s full session, if any.
+pub fn caller(auth: *Auth, a: std.mem.Allocator, token: ?[]const u8, now: i64) !?Caller {
+    const t = token orelse return null;
+    const h = users.tokenHash(t);
+    auth.lock.lockUncancelable(auth.io);
+    defer auth.lock.unlock(auth.io);
+    const s = (try auth.db.webSessionGet(&h, now)) orelse return null;
+    if (!s.full) return null;
+    const acc = (try auth.db.userGet(a, s.user_id)) orelse return null;
+    const own: Caller = .{ .id = acc.id, .name = acc.name, .is_superuser = acc.is_superuser, .rights = try auth.db.userRights(a, acc.id) };
+    const eid = s.effective_user_id orelse return own;
+    if (eid == acc.id) return own;
+    const eff = (try auth.db.userGet(a, eid)) orelse return own;
+    return .{
+        .id = eff.id,
+        .name = eff.name,
+        .is_superuser = eff.is_superuser,
+        .rights = try auth.db.userRights(a, eff.id),
+        .real = .{ .id = own.id, .name = own.name, .is_superuser = own.is_superuser, .rights = own.rights },
+    };
+}
+
+/// Handles the sign-in and user calls; null if `name` is not one of them.
+pub fn call(auth: *Auth, a: std.mem.Allocator, name: []const u8, body: []const u8, token: ?[]const u8, now: i64) !?Reply {
+    if (std.mem.eql(u8, name, "login")) return try login(auth, a, body, now);
+    if (std.mem.eql(u8, name, "login2")) return try login2(auth, a, body, token, now);
+    if (std.mem.eql(u8, name, "logout")) {
+        if (token) |t| {
+            auth.lock.lockUncancelable(auth.io);
+            defer auth.lock.unlock(auth.io);
+            try auth.db.webSessionDelete(&users.tokenHash(t));
+        }
+        return .{ .body = "{\"ok\":true}", .clear_token = true };
+    }
+    if (std.mem.eql(u8, name, "me")) {
+        const c = (try caller(auth, a, token, now)) orelse return try fail(a, .unauthorized, "not signed in");
+        // `real`: the signed-in user's name while it acts as another;
+        // whether it may act as another or stop (its own rights)
+        return .{ .body = try json(a, .{
+            .name = c.name,
+            .superuser = c.is_superuser,
+            .rights = c.rights,
+            .real = if (c.real) |r| r.name else null,
+            .can_select = c.realCan("user", "select"),
+            .can_unselect = c.realCan("user", "unselect"),
+        }) };
+    }
+    if (std.mem.eql(u8, name, "profile.password")) {
+        const c = (try caller(auth, a, token, now)) orelse return try fail(a, .unauthorized, "not signed in");
+        return try ownPassword(auth, a, body, &c);
+    }
+    const is_user = std.mem.startsWith(u8, name, "users.");
+    if (is_user or std.mem.startsWith(u8, name, "roles.")) {
+        const c = (try caller(auth, a, token, now)) orelse return try fail(a, .unauthorized, "not signed in");
+        const what = name["users.".len..];
+        auth.lock.lockUncancelable(auth.io);
+        defer auth.lock.unlock(auth.io);
+        return if (is_user) try userCall(auth, a, what, body, &c, &users.tokenHash(token.?), now) else try roleCall(auth, a, what, body, &c);
+    }
+    return null;
+}
+
+fn login(auth: *Auth, a: std.mem.Allocator, body: []const u8, now: i64) !Reply {
+    const Req = struct { name: []const u8, password: []const u8 };
+    const req = std.json.parseFromSliceLeaky(Req, a, body, .{ .ignore_unknown_fields = true }) catch return fail(a, .bad_request, "bad request");
+
+    const found = blk: {
+        auth.lock.lockUncancelable(auth.io);
+        defer auth.lock.unlock(auth.io);
+        break :blk try auth.db.userByName(a, req.name);
+    };
+    // The password is hashed either way, so an unknown name takes as long
+    // as a wrong password and both get the same answer
+    const acc = found orelse {
+        _ = users.checkPassword(a, auth.io, dummy_hash, req.password);
+        return fail(a, .unauthorized, "wrong name or password");
+    };
+    if (acc.disabled) {
+        _ = users.checkPassword(a, auth.io, dummy_hash, req.password);
+        return fail(a, .unauthorized, "wrong name or password");
+    }
+    if (acc.locked_until > now) return .{ .status = .too_many_requests, .body = try json(a, .{ .@"error" = "locked", .retry_after = acc.locked_until - now }) };
+    if (!users.checkPassword(a, auth.io, acc.password_hash, req.password)) {
+        auth.lock.lockUncancelable(auth.io);
+        defer auth.lock.unlock(auth.io);
+        try auth.db.userFailed(acc.id, now);
+        return fail(a, .unauthorized, "wrong name or password");
+    }
+
+    const token = try a.dupe(u8, &users.newToken(auth.io));
+    auth.lock.lockUncancelable(auth.io);
+    defer auth.lock.unlock(auth.io);
+    try auth.db.webSessionCreate(&users.tokenHash(token), acc.id, now, now + pending_s);
+    if (!second_step) {
+        // Built without the second step: signed in with the password
+        try auth.db.userPasswordOk(acc.id);
+        try auth.db.webSessionPromote(&users.tokenHash(token), now + session_s);
+        return .{
+            .body = try json(a, .{ .step = "done", .name = acc.name, .superuser = acc.is_superuser, .rights = try auth.db.userRights(a, acc.id) }),
+            .set_token = token,
+            .token_max_age = session_s,
+        };
+    }
+    if (acc.totp_confirmed) return .{ .body = "{\"step\":\"code\"}", .set_token = token, .token_max_age = pending_s };
+
+    // First sign-in (or after a reset): a new secret for the authenticator app
+    const secret = users.newTotpSecret(auth.io);
+    try auth.db.userSetTotpSecret(acc.id, secret);
+    return .{
+        .body = try json(a, .{ .step = "setup", .secret = @as([]const u8, &users.totpSecretText(secret)), .uri = try users.totpUri(a, secret, acc.name) }),
+        .set_token = token,
+        .token_max_age = pending_s,
+    };
+}
+
+fn login2(auth: *Auth, a: std.mem.Allocator, body: []const u8, token: ?[]const u8, now: i64) !Reply {
+    const Req = struct { code: []const u8 };
+    const req = std.json.parseFromSliceLeaky(Req, a, body, .{ .ignore_unknown_fields = true }) catch return fail(a, .bad_request, "bad request");
+    const t = token orelse return fail(a, .unauthorized, "sign in first");
+    const h = users.tokenHash(t);
+
+    auth.lock.lockUncancelable(auth.io);
+    defer auth.lock.unlock(auth.io);
+    const s = (try auth.db.webSessionGet(&h, now)) orelse return fail(a, .unauthorized, "sign in first");
+    const acc = (try auth.db.userGet(a, s.user_id)) orelse return fail(a, .unauthorized, "sign in first");
+    if (acc.locked_until > now) return .{ .status = .too_many_requests, .body = try json(a, .{ .@"error" = "locked", .retry_after = acc.locked_until - now }) };
+    const secret = (try auth.db.userTotpSecret(acc.id)) orelse return fail(a, .unauthorized, "sign in first");
+    const step = users.totpVerify(&secret, req.code, now, @intCast(acc.totp_last_step)) orelse {
+        try auth.db.userFailed(acc.id, now);
+        return fail(a, .unauthorized, "wrong code");
+    };
+    try auth.db.userTotpUsed(acc.id, @intCast(step));
+    try auth.db.webSessionPromote(&h, now + session_s);
+    return .{
+        .body = try json(a, .{ .ok = true, .name = acc.name, .superuser = acc.is_superuser, .rights = try auth.db.userRights(a, acc.id) }),
+        .set_token = t,
+        .token_max_age = session_s,
+    };
+}
+
+const no_right = "you do not have the right to do this";
+
+/// users.*; the caller holds the lock. `token_hash`: the caller's session.
+fn userCall(auth: *Auth, a: std.mem.Allocator, name: []const u8, body: []const u8, c: *const Caller, token_hash: []const u8, now: i64) !Reply {
+    const db = auth.db;
+    const Req = struct { id: i64 = 0, name: []const u8 = "", disabled: bool = false, role: i64 = 0 };
+    const req = std.json.parseFromSliceLeaky(Req, a, body, .{ .ignore_unknown_fields = true }) catch return fail(a, .bad_request, "bad request");
+
+    if (std.mem.eql(u8, name, "list")) {
+        if (!c.can("user", "browse")) return fail(a, .forbidden, no_right);
+        const list = try db.userList(a);
+        const Row = struct { id: i64, name: []const u8, superuser: bool, disabled: bool, second_step: bool, created: i64, roles: []const dbm.RoleRef };
+        const rows = try a.alloc(Row, list.len);
+        // A user's roles are shown to who may see them
+        const see_roles = c.can("user", "role_browse");
+        for (list, rows) |x, *r| r.* = .{ .id = x.id, .name = x.name, .superuser = x.is_superuser, .disabled = x.disabled, .second_step = x.totp_confirmed, .created = x.created, .roles = if (see_roles) try db.userRoles(a, x.id) else &.{} };
+        return .{ .body = try json(a, .{ .users = rows }) };
+    }
+    if (std.mem.eql(u8, name, "create")) {
+        if (!c.can("user", "insert")) return fail(a, .forbidden, no_right);
+        const password = users.randomPassword(auth.io);
+        const hash = try users.hashPassword(a, auth.io, &password, auth.cost);
+        const id = db.userCreate(req.name, false, hash, now) catch |e| return userError(a, e);
+        // Shown once: handed over by whoever made the user
+        return .{ .body = try json(a, .{ .ok = true, .id = id, .name = req.name, .password = @as([]const u8, &password) }) };
+    }
+    if (std.mem.eql(u8, name, "select")) {
+        if (!c.realCan("user", "select")) return fail(a, .forbidden, no_right);
+        const target = (try db.userGet(a, req.id)) orelse return fail(a, .not_found, "no such user");
+        if (target.disabled) return fail(a, .conflict, "this user is blocked");
+        if (target.is_superuser and !(if (c.real) |r| r.is_superuser else c.is_superuser)) return fail(a, .forbidden, "only the superuser may act as the superuser");
+        try db.webSessionSetEffective(token_hash, if (target.id == c.realId()) null else target.id);
+        return .{ .body = "{\"ok\":true}" };
+    }
+    if (std.mem.eql(u8, name, "unselect")) {
+        if (c.real == null) return fail(a, .conflict, "you are not acting as another user");
+        if (!c.realCan("user", "unselect")) return fail(a, .forbidden, no_right);
+        try db.webSessionSetEffective(token_hash, null);
+        return .{ .body = "{\"ok\":true}" };
+    }
+
+    // The rest changes a user: never the superuser (except deleting and
+    // blocking, which the database refuses with its own answer)
+    const target = (try db.userGet(a, req.id)) orelse return fail(a, .not_found, "no such user");
+    const superuser_kept = "the superuser cannot be changed";
+    if (std.mem.eql(u8, name, "update")) {
+        if (!c.can("user", "update")) return fail(a, .forbidden, no_right);
+        if (target.is_superuser) return fail(a, .conflict, superuser_kept);
+        if (req.disabled and target.id == c.id) return fail(a, .conflict, "you cannot block your own user");
+        if (!std.mem.eql(u8, target.name, req.name)) db.userSetName(target.id, req.name) catch |e| return userError(a, e);
+        if (target.disabled != req.disabled) db.userSetDisabled(target.id, req.disabled) catch |e| return userError(a, e);
+        return .{ .body = "{\"ok\":true}" };
+    }
+    if (std.mem.eql(u8, name, "reset")) {
+        if (!c.can("user", "update_pass")) return fail(a, .forbidden, no_right);
+        if (target.is_superuser) return fail(a, .conflict, superuser_kept);
+        const password = users.randomPassword(auth.io);
+        const hash = try users.hashPassword(a, auth.io, &password, auth.cost);
+        try db.userSetPassword(target.id, hash);
+        return .{ .body = try json(a, .{ .ok = true, .name = target.name, .password = @as([]const u8, &password) }) };
+    }
+    if (std.mem.eql(u8, name, "delete")) {
+        if (!c.can("user", "delete")) return fail(a, .forbidden, no_right);
+        if (target.id == c.id or target.id == c.realId()) return fail(a, .conflict, "you cannot delete your own user");
+        if (try db.userHasRole(target.id, admin_role) and try db.usersWithRole(admin_role) < 2) return fail(a, .conflict, "the last admin cannot be deleted");
+        db.userDelete(target.id) catch |e| return userError(a, e);
+        return .{ .body = "{\"ok\":true}" };
+    }
+    if (std.mem.eql(u8, name, "grant")) {
+        if (!c.can("user", "role_grant")) return fail(a, .forbidden, no_right);
+        if (target.is_superuser) return fail(a, .conflict, superuser_kept);
+        db.userGrant(target.id, req.role) catch |e| return switch (e) {
+            error.Duplicate => fail(a, .conflict, "the user has this role already"),
+            else => userError(a, e),
+        };
+        return .{ .body = "{\"ok\":true}" };
+    }
+    if (std.mem.eql(u8, name, "revoke")) {
+        if (!c.can("user", "role_revoke")) return fail(a, .forbidden, no_right);
+        if (target.is_superuser) return fail(a, .conflict, superuser_kept);
+        const role = (try db.roleGet(a, req.role)) orelse return fail(a, .not_found, "no such role");
+        if (std.mem.eql(u8, role.name, admin_role) and try db.userHasRole(target.id, admin_role) and try db.usersWithRole(admin_role) < 2)
+            return fail(a, .conflict, "the last admin cannot lose the role admin");
+        db.userRevoke(target.id, req.role) catch |e| return userError(a, e);
+        return .{ .body = "{\"ok\":true}" };
+    }
+    return fail(a, .not_found, "unknown call");
+}
+
+/// The role that is never deleted, changed only by the superuser, and
+/// always kept by at least one user.
+const admin_role = "admin";
+
+fn userError(a: std.mem.Allocator, e: anyerror) !Reply {
+    return switch (e) {
+        error.InvalidName => fail(a, .bad_request, "name: lowercase letters, digits, _ . -, 2 to 32 characters, starting with a letter"),
+        error.Duplicate => fail(a, .conflict, "this name is taken"),
+        error.NotFound => fail(a, .not_found, "no such user or role"),
+        error.Protected => fail(a, .conflict, "the superuser cannot be deleted or blocked"),
+        else => e,
+    };
+}
+
+/// profile.password: the signed-in user (or the one it acts as) changes
+/// its own password, giving the current one.
+fn ownPassword(auth: *Auth, a: std.mem.Allocator, body: []const u8, c: *const Caller) !Reply {
+    if (!c.can("profile", "update_password")) return fail(a, .forbidden, no_right);
+    const Req = struct { current: []const u8 = "", new: []const u8 = "", new2: []const u8 = "" };
+    const req = std.json.parseFromSliceLeaky(Req, a, body, .{ .ignore_unknown_fields = true }) catch return fail(a, .bad_request, "bad request");
+    if (req.current.len == 0 or req.new.len == 0 or req.new2.len == 0) return fail(a, .bad_request, "fill in every field");
+    const acc = blk: {
+        auth.lock.lockUncancelable(auth.io);
+        defer auth.lock.unlock(auth.io);
+        break :blk (try auth.db.userGet(a, c.id)) orelse return fail(a, .not_found, "no such user");
+    };
+    if (!users.checkPassword(a, auth.io, acc.password_hash, req.current)) return fail(a, .conflict, "the current password is wrong");
+    if (req.new.len < min_password) return fail(a, .bad_request, "the new password is too short: at least 8 characters");
+    if (std.mem.eql(u8, req.new, req.current)) return fail(a, .bad_request, "the new password is the current one");
+    if (!std.mem.eql(u8, req.new, req.new2)) return fail(a, .bad_request, "the new password and its repetition differ");
+    const hash = try users.hashPassword(a, auth.io, req.new, auth.cost);
+    auth.lock.lockUncancelable(auth.io);
+    defer auth.lock.unlock(auth.io);
+    auth.db.userSetOwnPassword(acc.id, hash) catch |e| return userError(a, e);
+    return .{ .body = "{\"ok\":true}" };
+}
+
+/// The shortest password a user may choose.
+const min_password = 8;
+
+/// roles.*; the caller holds the lock.
+fn roleCall(auth: *Auth, a: std.mem.Allocator, name: []const u8, body: []const u8, c: *const Caller) !Reply {
+    const db = auth.db;
+    // `rights` null: not sent, the role's rights stay as they are
+    const Req = struct { id: i64 = 0, name: []const u8 = "", description: []const u8 = "", rights: ?[]const []const u8 = null };
+    const req = std.json.parseFromSliceLeaky(Req, a, body, .{ .ignore_unknown_fields = true }) catch return fail(a, .bad_request, "bad request");
+    const role_name = std.mem.trim(u8, req.name, " ");
+    const description = std.mem.trim(u8, req.description, " ");
+
+    if (std.mem.eql(u8, name, "list")) {
+        // Also for the roles a user has and can be given
+        if (!c.can("role", "browse") and !c.can("user", "role_browse") and !c.can("user", "role_grant")) return fail(a, .forbidden, no_right);
+        return .{ .body = try json(a, .{ .roles = try db.roleList(a) }) };
+    }
+    if (std.mem.eql(u8, name, "get")) {
+        if (!c.can("role", "browse")) return fail(a, .forbidden, no_right);
+        const role = (try db.roleGet(a, req.id)) orelse return fail(a, .not_found, "no such role");
+        return .{ .body = try json(a, .{ .role = role, .rights = try db.roleRights(a, req.id) }) };
+    }
+    if (std.mem.eql(u8, name, "insert")) {
+        if (!c.can("role", "insert")) return fail(a, .forbidden, no_right);
+        const list = req.rights orelse &.{};
+        if (list.len > 0 and !c.can("role", "role_right")) return fail(a, .forbidden, no_right);
+        const id = db.roleInsert(role_name, description, list) catch |e| return roleError(a, e);
+        return .{ .body = try json(a, .{ .ok = true, .id = id }) };
+    }
+    if (std.mem.eql(u8, name, "update")) {
+        if (!c.can("role", "update")) return fail(a, .forbidden, no_right);
+        if (req.rights != null and !c.can("role", "role_right")) return fail(a, .forbidden, no_right);
+        const old = (try db.roleGet(a, req.id)) orelse return fail(a, .not_found, "no such role");
+        if (std.mem.eql(u8, old.name, admin_role) and !c.is_superuser) return fail(a, .forbidden, "only the superuser changes the role admin");
+        db.roleUpdate(req.id, role_name, description, req.rights) catch |e| return roleError(a, e);
+        return .{ .body = "{\"ok\":true}" };
+    }
+    if (std.mem.eql(u8, name, "delete")) {
+        if (!c.can("role", "delete")) return fail(a, .forbidden, no_right);
+        const old = (try db.roleGet(a, req.id)) orelse return fail(a, .not_found, "no such role");
+        if (std.mem.eql(u8, old.name, admin_role)) return fail(a, .conflict, "the role admin cannot be deleted");
+        db.roleDelete(req.id) catch |e| return roleError(a, e);
+        return .{ .body = "{\"ok\":true}" };
+    }
+    return fail(a, .not_found, "unknown call");
+}
+
+fn roleError(a: std.mem.Allocator, e: anyerror) !Reply {
+    return switch (e) {
+        error.InvalidName => fail(a, .bad_request, "name: letters, digits, _ and -, at most 32 characters, starting with a letter"),
+        error.Duplicate => fail(a, .conflict, "this name is taken"),
+        error.NotFound => fail(a, .not_found, "no such role"),
+        error.InvalidRight => fail(a, .bad_request, "unknown right"),
+        error.InUse => fail(a, .conflict, "users have this role; take it from them first"),
+        else => e,
+    };
+}
+
+/// Hash of a password nobody has: what an unknown name is checked against.
+const dummy_hash = "$argon2id$v=19$m=65536,t=3,p=1$dGVybWdhdGUtZHVtbXk$Zm9yLXRpbWluZy1vbmx5LW5vdC1hLXJlYWwtaGFzaA";
+
+/// First start: the first user, the superuser, with a password to hand
+/// over. Null if there are users already.
+pub fn firstSuperuser(auth: *Auth, name: []const u8, now: i64) !?[20]u8 {
+    auth.lock.lockUncancelable(auth.io);
+    defer auth.lock.unlock(auth.io);
+    if (try auth.db.userCount() > 0) return null;
+    const password = users.randomPassword(auth.io);
+    const hash = try users.hashPassword(auth.gpa, auth.io, &password, auth.cost);
+    defer auth.gpa.free(hash);
+    _ = try auth.db.userCreate(name, true, hash, now);
+    return password;
+}
+
+
+// ---------------------------------------------------------------------------
+// Tests
+
+const testing = std.testing;
+
+/// Signs `name` in with both steps (its second step set up on the way);
+/// returns the session token.
+fn testSignIn(auth: *Auth, a: std.mem.Allocator, name: []const u8, password: []const u8, now: i64) ![]const u8 {
+    const l1 = (try call(auth, a, "login", try std.fmt.allocPrint(a, "{{\"name\":\"{s}\",\"password\":\"{s}\"}}", .{ name, password }), null, now)).?;
+    const t = l1.set_token.?;
+    const id = (try auth.db.userByName(a, name)).?.id;
+    const secret = (try auth.db.userTotpSecret(id)).?;
+    const r = (try call(auth, a, "login2", try std.fmt.allocPrint(a, "{{\"code\":\"{d:0>6}\"}}", .{users.totpCode(&secret, @intCast(@divFloor(now, 30)))}), t, now)).?;
+    try testing.expectEqual(std.http.Status.ok, r.status);
+    return t;
+}
+
+fn field(a: std.mem.Allocator, body: []const u8, comptime name: []const u8) []const u8 {
+    const v = std.json.parseFromSliceLeaky(std.json.Value, a, body, .{}) catch return "";
+    const x = v.object.get(name) orelse return "";
+    return if (x == .string) x.string else "";
+}
+
+test "sign in with two steps; users, roles and rights" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var db = try dbm.Db.open(":memory:");
+    defer db.close();
+    db.setLogKey(testing.io, @splat(7));
+    var lock: Io.Mutex = .init;
+    var auth: Auth = .{ .gpa = testing.allocator, .io = testing.io, .db = &db, .lock = &lock, .cost = users.test_cost };
+    var now: i64 = 1_794_000_000;
+
+    const pw = (try firstSuperuser(&auth, "superuser", now)).?;
+    try testing.expect(try firstSuperuser(&auth, "superuser2", now) == null);
+
+    // Wrong password and unknown name: the same answer
+    const bad = (try call(&auth, a, "login", "{\"name\":\"superuser\",\"password\":\"nope\"}", null, now)).?;
+    const unknown = (try call(&auth, a, "login", "{\"name\":\"ghost\",\"password\":\"nope\"}", null, now)).?;
+    try testing.expectEqual(std.http.Status.unauthorized, bad.status);
+    try testing.expectEqualStrings(bad.body, unknown.body);
+
+    // First sign-in: the second step is set up
+    const body = try std.fmt.allocPrint(a, "{{\"name\":\"superuser\",\"password\":\"{s}\"}}", .{&pw});
+    const l1 = (try call(&auth, a, "login", body, null, now)).?;
+    try testing.expectEqualStrings("setup", field(a, l1.body, "step"));
+    const token = l1.set_token.?;
+    // A pending session is not signed in
+    try testing.expectEqual(std.http.Status.unauthorized, (try call(&auth, a, "me", "{}", token, now)).?.status);
+    const secret = (try db.userTotpSecret(1)).?;
+    try testing.expect(std.mem.indexOf(u8, field(a, l1.body, "uri"), "otpauth://totp/termgate:superuser?secret=") != null);
+    try testing.expectEqual(std.http.Status.unauthorized, (try call(&auth, a, "login2", "{\"code\":\"000000\"}", token, now)).?.status);
+    const code = try std.fmt.allocPrint(a, "{{\"code\":\"{d:0>6}\"}}", .{users.totpCode(&secret, @intCast(@divFloor(now, 30)))});
+    const l2 = (try call(&auth, a, "login2", code, token, now)).?;
+    try testing.expectEqual(std.http.Status.ok, l2.status);
+    try testing.expect(std.mem.indexOf(u8, (try call(&auth, a, "me", "{}", token, now)).?.body, "\"superuser\":true") != null);
+    // The same code does not work a second time
+    const again = (try call(&auth, a, "login", body, null, now)).?;
+    try testing.expectEqualStrings("code", field(a, again.body, "step"));
+    try testing.expectEqual(std.http.Status.unauthorized, (try call(&auth, a, "login2", code, again.set_token.?, now)).?.status);
+
+    // The superuser makes a user; without a role it may do nothing
+    const made = (try call(&auth, a, "users.create", "{\"name\":\"denetci\"}", token, now)).?;
+    const aud_pw = field(a, made.body, "password");
+    try testing.expectEqual(@as(usize, 20), aud_pw.len);
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.create", "{\"name\":\"denetci\"}", token, now)).?.status);
+    now += 60;
+    const al1 = (try call(&auth, a, "login", try std.fmt.allocPrint(a, "{{\"name\":\"denetci\",\"password\":\"{s}\"}}", .{aud_pw}), null, now)).?;
+    const aud_token = al1.set_token.?;
+    const aud_secret = (try db.userTotpSecret(2)).?;
+    _ = (try call(&auth, a, "login2", try std.fmt.allocPrint(a, "{{\"code\":\"{d:0>6}\"}}", .{users.totpCode(&aud_secret, @intCast(@divFloor(now, 30)))}), aud_token, now)).?;
+    try testing.expect(std.mem.indexOf(u8, (try call(&auth, a, "me", "{}", aud_token, now)).?.body, "\"rights\":[]") != null);
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.list", "{}", aud_token, now)).?.status);
+    try testing.expectEqual(std.http.Status.unauthorized, (try call(&auth, a, "users.list", "{}", null, now)).?.status);
+
+    // A role with two rights, given to the user: the next call has them
+    const role = (try call(&auth, a, "roles.insert", "{\"name\":\"clerk\",\"description\":\"Looks\",\"rights\":[\"user:browse\",\"user:role_browse\",\"role:browse\"]}", token, now)).?;
+    try testing.expectEqualStrings("{\"ok\":true,\"id\":3}", role.body);
+    try testing.expectEqual(std.http.Status.bad_request, (try call(&auth, a, "roles.insert", "{\"name\":\"x\",\"rights\":[\"user:fly\"]}", token, now)).?.status);
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.grant", "{\"id\":2,\"role\":1}", aud_token, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.grant", "{\"id\":2,\"role\":3}", token, now)).?.status);
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.grant", "{\"id\":2,\"role\":3}", token, now)).?.status);
+    const listed = (try call(&auth, a, "users.list", "{}", aud_token, now)).?;
+    try testing.expectEqual(std.http.Status.ok, listed.status);
+    try testing.expect(std.mem.indexOf(u8, listed.body, "\"roles\":[{\"id\":3,\"name\":\"clerk\"}]") != null);
+    try testing.expect(std.mem.indexOf(u8, (try call(&auth, a, "roles.get", "{\"id\":3}", aud_token, now)).?.body, "\"rights\":[\"role:browse\",\"user:browse\",\"user:role_browse\"]") != null);
+    // Browsing is not changing
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.create", "{\"name\":\"x1\"}", aud_token, now)).?.status);
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "roles.update", "{\"id\":3,\"name\":\"clerk\",\"rights\":[\"user:delete\"]}", aud_token, now)).?.status);
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "roles.delete", "{\"id\":3}", token, now)).?.status);
+
+    // The superuser stays; nobody blocks or deletes themselves
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.update", "{\"id\":1,\"name\":\"superuser\",\"disabled\":true}", token, now)).?.status);
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.delete", "{\"id\":1}", token, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.update", "{\"id\":2,\"name\":\"okuyan\",\"disabled\":false}", token, now)).?.status);
+    try testing.expectEqualStrings("okuyan", field(a, (try call(&auth, a, "me", "{}", aud_token, now)).?.body, "name"));
+    // Blocking ends the user's session
+    _ = (try call(&auth, a, "users.update", "{\"id\":2,\"name\":\"okuyan\",\"disabled\":true}", token, now)).?;
+    try testing.expectEqual(std.http.Status.unauthorized, (try call(&auth, a, "me", "{}", aud_token, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.delete", "{\"id\":2}", token, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "roles.delete", "{\"id\":3}", token, now)).?.status);
+
+    // our earlier project's rules. erdem has the role admin (every right), but is
+    // not the superuser.
+    _ = (try call(&auth, a, "users.create", "{\"name\":\"erdem\"}", token, now)).?;
+    const erdem = (try db.userByName(a, "erdem")).?.id;
+    _ = (try call(&auth, a, "users.grant", try std.fmt.allocPrint(a, "{{\"id\":{d},\"role\":1}}", .{erdem}), token, now)).?;
+    const erdem_pw = "ankara12";
+    try db.userSetOwnPassword(erdem, try users.hashPassword(a, auth.io, erdem_pw, auth.cost));
+    const et = try testSignIn(&auth, a, "erdem", erdem_pw, now);
+    // Nobody changes the superuser: not its name, password or roles
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.update", "{\"id\":1,\"name\":\"boss\",\"disabled\":false}", et, now)).?.status);
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.reset", "{\"id\":1}", et, now)).?.status);
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.grant", "{\"id\":1,\"role\":2}", et, now)).?.status);
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.revoke", "{\"id\":1,\"role\":1}", et, now)).?.status);
+    // The role admin: never deleted, changed by the superuser only
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "roles.delete", "{\"id\":1}", token, now)).?.status);
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "roles.update", "{\"id\":1,\"name\":\"admin\",\"description\":\"x\",\"rights\":[]}", et, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "roles.update", "{\"id\":1,\"name\":\"admin\",\"description\":\"Everything.\"}", token, now)).?.status);
+    try testing.expect((try db.roleRights(a, 1)).len > 20);
+    // The last admin is kept
+    const eid = try std.fmt.allocPrint(a, "{{\"id\":{d},\"role\":1}}", .{erdem});
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.delete", eid, token, now)).?.status);
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.revoke", eid, token, now)).?.status);
+    // Changing a role's rights is a right of its own
+    _ = (try call(&auth, a, "users.create", "{\"name\":\"veli\"}", token, now)).?;
+    const veli = (try db.userByName(a, "veli")).?.id;
+    try db.userSetOwnPassword(veli, try users.hashPassword(a, auth.io, "trabzon61", auth.cost));
+    const editor = try db.roleInsert("editor", "Names roles", &.{ "role:browse", "role:update" });
+    try db.userGrant(veli, editor);
+    const vt = try testSignIn(&auth, a, "veli", "trabzon61", now);
+    const ed_body = try std.fmt.allocPrint(a, "{{\"id\":{d},\"name\":\"editor\",\"description\":\"Renamed\"", .{editor});
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "roles.update", try std.mem.concat(a, u8, &.{ ed_body, ",\"rights\":[]}" }), vt, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "roles.update", try std.mem.concat(a, u8, &.{ ed_body, "}" }), vt, now)).?.status);
+    try testing.expectEqual(@as(usize, 2), (try db.roleRights(a, editor)).len);
+    // Acting as another user: veli's rights apply, the audit names both
+    const vid = try std.fmt.allocPrint(a, "{{\"id\":{d}}}", .{veli});
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.select", "{\"id\":1}", et, now)).?.status);
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.select", vid, vt, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.select", vid, et, now)).?.status);
+    const as_veli = (try call(&auth, a, "me", "{}", et, now)).?.body;
+    try testing.expectEqualStrings("veli", field(a, as_veli, "name"));
+    try testing.expectEqualStrings("erdem", field(a, as_veli, "real"));
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.list", "{}", et, now)).?.status);
+    try testing.expectEqualStrings("erdem as veli", (try caller(&auth, a, et, now)).?.auditName(a));
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.unselect", "{}", et, now)).?.status);
+    try testing.expectEqualStrings("erdem", field(a, (try call(&auth, a, "me", "{}", et, now)).?.body, "name"));
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.unselect", "{}", et, now)).?.status);
+    // Changing one's own password needs the current one
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "profile.password", "{\"current\":\"wrong\",\"new\":\"izmir3535\",\"new2\":\"izmir3535\"}", et, now)).?.status);
+    try testing.expectEqual(std.http.Status.bad_request, (try call(&auth, a, "profile.password", "{\"current\":\"ankara12\",\"new\":\"short\",\"new2\":\"short\"}", et, now)).?.status);
+    try testing.expectEqual(std.http.Status.bad_request, (try call(&auth, a, "profile.password", "{\"current\":\"ankara12\",\"new\":\"izmir3535\",\"new2\":\"izmir3536\"}", et, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "profile.password", "{\"current\":\"ankara12\",\"new\":\"izmir3535\",\"new2\":\"izmir3535\"}", et, now)).?.status);
+    try testing.expectEqualStrings("code", field(a, (try call(&auth, a, "login", "{\"name\":\"erdem\",\"password\":\"izmir3535\"}", null, now)).?.body, "step"));
+    // With a second admin, the first may lose the role
+    try db.userGrant(veli, 1);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.revoke", eid, token, now)).?.status);
+
+    // Five wrong passwords lock the user, also for the right one
+    for (0..5) |_| _ = (try call(&auth, a, "login", "{\"name\":\"superuser\",\"password\":\"nope\"}", null, now)).?;
+    try testing.expectEqual(std.http.Status.too_many_requests, (try call(&auth, a, "login", body, null, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "login", body, null, now + 61)).?.status);
+
+    // Signing out ends the session; a full session ends after 12 hours
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "me", "{}", token, now + session_s - 120)).?.status);
+    try testing.expectEqual(std.http.Status.unauthorized, (try call(&auth, a, "me", "{}", token, now + session_s)).?.status);
+    _ = (try call(&auth, a, "logout", "{}", token, now)).?;
+    try testing.expectEqual(std.http.Status.unauthorized, (try call(&auth, a, "me", "{}", token, now)).?.status);
+
+    try testing.expect(try call(&auth, a, "nodes.list", "{}", token, now) == null);
+}

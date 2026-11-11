@@ -96,7 +96,7 @@
     await go("#/node/insert");
     fill("node-name-input", "web_gw01");
     await click("[data-action=nodeInsert]");
-    await wait("the node key", () => text("pre").startsWith("tgnode --registration tg1-"));
+    await wait("the node key", () => text("pre").startsWith("tgnode --node-key tg1-"));
 
     step = "search";
     await go("#/node?key=GW0&pn=1");

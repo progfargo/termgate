@@ -316,7 +316,7 @@ pub fn newKey(f: Form) void {
 const Key = struct { id: i64, code: []const u8 };
 
 fn showKey(n: Node, key: Key) void {
-    const command = std.fmt.allocPrint(app.arena(), "tgnode --registration {s}", .{key.code}) catch return;
+    const command = std.fmt.allocPrint(app.arena(), "tgnode --node-key {s}", .{key.code}) catch return;
     var b: app.Buf = .{};
     recordHeader(&b, n, .new_key);
     content.contentStart(&b);

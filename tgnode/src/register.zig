@@ -1,4 +1,4 @@
-//! First run: registration with a node key (tgnode --registration tg1-...).
+//! First run: registration with a node key (tgnode --node-key tg1-...).
 //!
 //! 1. Parse the node key: relay address, CA fingerprint, token.
 //! 2. Connect without certificate verification and ask for termgate's CA

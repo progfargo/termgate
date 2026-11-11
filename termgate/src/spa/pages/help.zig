@@ -11,7 +11,7 @@ const Topic = struct { title: []const u8, lines: []const []const u8 };
 
 const topics = [_]Topic{
     .{ .title = "Nodes", .lines = &.{
-        "A node is a gateway that runs tgnode. New gives a key and the command to run on the device once: tgnode --registration <key>.",
+        "A node is a gateway that runs tgnode. New gives a key and the command to run on the device once: tgnode --node-key <key>.",
         "The device then asks to be approved here. Approved nodes are online while they are connected to the relay.",
         "A disabled or deleted node is disconnected at once.",
     } },

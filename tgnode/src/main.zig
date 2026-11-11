@@ -6,7 +6,7 @@
 //!   tgnode id                 print this node's public key (from the hardware)
 //!   tgnode status             print the system info sent to termgate
 //!   tgnode run                serve sessions
-//!   tgnode --registration <node key>
+//!   tgnode --node-key <node key>
 //!                             first run: register with termgate, store the
 //!                             config once the admin approves, then serve
 //!
@@ -28,7 +28,7 @@ const usage =
     \\  id                 print this node's public key
     \\  status             print the system info sent to termgate
     \\  run                serve sessions
-    \\  --registration <node key>
+    \\  --node-key <node key>
     \\                     first run: register with termgate, then serve
     \\
     \\The config is node.json in the folder tgnode is started in.
@@ -68,7 +68,7 @@ pub fn main(init: std.process.Init) !void {
         const key = try hwkey.keyPair(init.gpa, io, root);
         return agent.serveForever(init.gpa, io, cfg.value, key, root);
     }
-    if (args.len == 3 and std.mem.eql(u8, args[1], "--registration")) {
+    if (args.len == 3 and std.mem.eql(u8, args[1], "--node-key")) {
         const path = config.file_name;
         var root = try std.Io.Dir.openDirAbsolute(io, "/", .{});
         defer root.close(io);

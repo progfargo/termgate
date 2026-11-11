@@ -1,12 +1,17 @@
 /* termgate's few additions to our earlier project's style sheet (web/asset/css,
    kept as it is). */
 
-/* A row's buttons may go on to a second line instead of widening the
-   table (Users has six) */
+/* The Command column (a row's buttons, the last column) is as wide as
+   its buttons: the free width goes to the other columns */
+th.right:last-child,
+td.right:last-child {
+    width: 1%;
+    white-space: nowrap;
+}
+
 td .button-group-fixed {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     justify-content: flex-end;
-    row-gap: 4px;
 }
 
 /* A table's caption (counts about the list) under the table */

@@ -388,14 +388,14 @@ fn renderRoles() void {
     content.contentEnd(&b);
     // Giving one of the roles the user does not have yet
     if (state.can("user", "role_grant")) {
-        // As our earlier project's: the select and the button side by side
-        b.raw("<div class=\"row row-command\"><div class=\"col\"><form><div class=\"button-group-fixed\"><select id=\"user-role-select\" class=\"form-control\"><option value=\"0\">Select a role</option>");
+        // A form as the others: the field, then the button under it
+        b.raw("<div class=\"row row-content\"><div class=\"col\"><form><div class=\"form-group\"><label class=\"required\">Role:</label><select id=\"user-role-select\" class=\"form-control\"><option value=\"0\">Select a role</option>");
         for (all) |r| {
             var has = false;
             for (u.roles) |x| has = has or x.id == r.id;
             if (!has) b.add("<option value=\"{d}\">{f}</option>", .{ r.id, app.esc(r.name) });
         }
-        b.raw("</select><button type=\"button\" data-action=\"userRoleGrant\" class=\"button button-primary button-sm\">Grant</button></div></form></div></div>");
+        b.raw("</select></div><div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userRoleGrant\" class=\"button button-primary button-sm\">Grant</button></div></div></form></div></div>");
     }
     show(&b);
 }

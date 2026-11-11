@@ -140,8 +140,8 @@ fn addSession(f: *Fixture, comptime tag: []const u8, node: []const u8, user: []c
     const th = dbm.tokenHash("tok-" ++ tag);
     const uid = try terminalUser(&f.db, "u-" ++ tag);
     try f.db.userSetNodes(uid, "*");
-    try f.db.terminalInvite(uid, .{ .max_uses = 5 }, &th, now() + 60, now());
-    try f.db.terminalRedeem(uid, user);
+    try f.db.terminalNewAccessKey(uid, .{ .max_uses = 5 }, &th, now() + 60, now());
+    try f.db.terminalUseAccessKey(uid, user);
     _ = try f.db.terminalUse(user, node, sid, started);
     try f.db.sessionSetKeys(sid, keys);
     return keys;
@@ -315,7 +315,7 @@ fn newCode(a: std.mem.Allocator, seed: u8) ![]u8 {
     return core.code.format(a, "127.0.0.1", port, fp, @splat(seed));
 }
 
-test "registration, status, invitation, approvals with max_uses, audit" {
+test "registration, status, access key, approvals with max_uses, audit" {
     const a = testing.allocator;
     var arena: std.heap.ArenaAllocator = .init(a);
     defer arena.deinit();
@@ -383,7 +383,7 @@ test "registration, status, invitation, approvals with max_uses, audit" {
         try testing.io.sleep(.fromMilliseconds(50), .awake);
     } else return error.StatusNotRecorded;
 
-    // --- The admin invites Ali to "box*", once
+    // --- The admin gives Ali (nodes "box*") an access key for one session
     const inv_text = try newCode(a, 0x73);
     defer a.free(inv_text);
     const inv = try core.code.parse(inv_text);
@@ -393,14 +393,14 @@ test "registration, status, invitation, approvals with max_uses, audit" {
         defer f.lock.unlock(testing.io);
         const uid = try terminalUser(&f.db, "ali");
         try f.db.userSetNodes(uid, "box*");
-        try f.db.terminalInvite(uid, .{ .max_uses = 1 }, &inv_th, now() + 3600, now());
+        try f.db.terminalNewAccessKey(uid, .{ .max_uses = 1 }, &inv_th, now() + 3600, now());
     }
     const ali = try KeyPair.fromRawSeed(.user, @splat(0x74));
     const ali_pub = ali.publicKey().encode();
     const issuer_text = blk: {
         const c = try f.connect(ali, inv.token, &inbox);
         defer c.close();
-        const subject = try std.fmt.allocPrint(ar, "invite.{s}", .{&core.code.tokenId(inv.token)});
+        const subject = try std.fmt.allocPrint(ar, "access.{s}", .{&core.code.tokenId(inv.token)});
         const body = try std.fmt.allocPrint(ar, "{{\"user_key\":\"{s}\"}}", .{&ali_pub});
         const r = try c.request(subject, body, Conn.seconds(5));
         defer r.deinit(a);
@@ -408,7 +408,7 @@ test "registration, status, invitation, approvals with max_uses, audit" {
         const ans = try std.json.parseFromSliceLeaky(Ans, ar, r.payload, .{ .allocate = .alloc_always });
         break :blk ans.issuer;
     };
-    // Ali's key alone now connects (user permissions); the invitation is used up
+    // Ali's key alone now connects (user permissions); the access key is used up
     {
         const c = try f.connect(ali, null, &inbox);
         c.close();
@@ -417,7 +417,7 @@ test "registration, status, invitation, approvals with max_uses, audit" {
 
     // --- box1 asks for approval of Ali's sessions: once allowed, then refused
     const issuer_pub = (try KeyPair.fromRawSeed(.account, @splat(0x1f))).publicKey().encode();
-    // The invitation answered only termgate's issuer key
+    // The access key answered only termgate's issuer key
     try testing.expectEqualStrings(&issuer_pub, issuer_text);
     // Each request carries both session public keys and the session keys
     // sealed to termgate
@@ -504,8 +504,8 @@ test "strangers get only the CA; revoked access closes the connection" {
         defer f.lock.unlock(testing.io);
         const id = try terminalUser(&f.db, "bob");
         try f.db.userSetNodes(id, "*");
-        try f.db.terminalInvite(id, .{ .max_uses = 1 }, &th, now() + 60, now());
-        try f.db.terminalRedeem(id, &bob.publicKey().encode());
+        try f.db.terminalNewAccessKey(id, .{ .max_uses = 1 }, &th, now() + 60, now());
+        try f.db.terminalUseAccessKey(id, &bob.publicKey().encode());
     }
     const ok = try f.connect(bob, null, &inbox);
     defer ok.close();

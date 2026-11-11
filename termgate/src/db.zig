@@ -108,8 +108,8 @@ pub const Db = struct {
             \\    description TEXT NOT NULL DEFAULT '',
             \\    state TEXT NOT NULL,
             \\    hardwareKey TEXT UNIQUE,
-            \\    tokenHash TEXT UNIQUE,
-            \\    tokenExpires INTEGER,
+            \\    nodeKeyHash TEXT UNIQUE,
+            \\    nodeKeyExpires INTEGER,
             \\    requestKey TEXT,
             \\    status TEXT,
             \\    created INTEGER NOT NULL,
@@ -177,16 +177,16 @@ pub const Db = struct {
         );
         try db.exec("CREATE INDEX IF NOT EXISTS userRoleRole ON userRole(roleId)");
         if (first_roles) try db.seedRoles();
-        // A user's terminal access: its invitation (the token's hash until
-        // it is used), the key it bound, the invitation's limits and the
+        // A user's terminal access: its access key (the token's hash until
+        // it is used), the key it bound, the access key's limits and the
         // sessions opened so far. Which nodes is the user's (user.nodes).
         try db.exec(
             \\CREATE TABLE IF NOT EXISTS terminal (
             \\    userId INTEGER PRIMARY KEY REFERENCES user(userId) ON DELETE CASCADE,
             \\    kind TEXT NOT NULL,
             \\    userKey TEXT UNIQUE,
-            \\    tokenHash TEXT UNIQUE,
-            \\    tokenExpires INTEGER,
+            \\    accessKeyHash TEXT UNIQUE,
+            \\    accessKeyExpires INTEGER,
             \\    maxUses INTEGER,
             \\    expires INTEGER,
             \\    uses INTEGER NOT NULL DEFAULT 0,
@@ -902,17 +902,17 @@ pub const Db = struct {
 
     /// The admin creates a node; `token_hash` is the hash of its node key's
     /// token, valid until `token_expires`.
-    pub fn nodeCreate(db: *Db, name: []const u8, description: []const u8, token_hash: []const u8, token_expires: i64, now: i64) NodeError!i64 {
+    pub fn nodeCreate(db: *Db, name: []const u8, description: []const u8, key_hash: []const u8, key_expires: i64, now: i64) NodeError!i64 {
         if (!core.node.isValidName(name)) return error.InvalidName;
         var st = try Stmt.prepare(db,
-            \\insert into node(name, description, state, tokenHash, tokenExpires, created)
+            \\insert into node(name, description, state, nodeKeyHash, nodeKeyExpires, created)
             \\values(?, ?, 'waiting', ?, ?, ?)
         );
         defer st.finalize();
         try st.bindText(1, name);
         try st.bindText(2, description);
-        try st.bindText(3, token_hash);
-        try st.bindInt(4, token_expires);
+        try st.bindText(3, key_hash);
+        try st.bindInt(4, key_expires);
         try st.bindInt(5, now);
         st.done() catch |e| return db.mapUnique(e);
         return c.sqlite3_last_insert_rowid(db.handle);
@@ -921,15 +921,15 @@ pub const Db = struct {
     /// A new node key for an existing node (e.g. the hardware was replaced).
     /// The node keeps working with its current key until the new one is
     /// approved.
-    pub fn nodeNewToken(db: *Db, id: i64, token_hash: []const u8, token_expires: i64) NodeError!void {
+    pub fn nodeNewNodeKey(db: *Db, id: i64, key_hash: []const u8, key_expires: i64) NodeError!void {
         var st = try Stmt.prepare(db,
-            \\update node set tokenHash = ?, tokenExpires = ?, requestKey = null,
+            \\update node set nodeKeyHash = ?, nodeKeyExpires = ?, requestKey = null,
             \\  state = case when hardwareKey is null then 'waiting' else state end
             \\where nodeId = ?
         );
         defer st.finalize();
-        try st.bindText(1, token_hash);
-        try st.bindInt(2, token_expires);
+        try st.bindText(1, key_hash);
+        try st.bindInt(2, key_expires);
         try st.bindInt(3, id);
         st.done() catch |e| return db.mapUnique(e);
         if (c.sqlite3_changes(db.handle) == 0) return error.NotFound;
@@ -937,27 +937,27 @@ pub const Db = struct {
 
     /// The node whose unexpired node key has this token id (subject
     /// register.<id>).
-    pub fn nodeByTokenId(db: *Db, a: std.mem.Allocator, token_id: []const u8, now: i64) !?Node {
-        var st = try Stmt.prepare(db, node_select ++ " where substr(tokenHash, 1, 16) = ? and tokenExpires > ? and state != 'disabled'");
+    pub fn nodeByNodeKeyId(db: *Db, a: std.mem.Allocator, key_id: []const u8, now: i64) !?Node {
+        var st = try Stmt.prepare(db, node_select ++ " where substr(nodeKeyHash, 1, 16) = ? and nodeKeyExpires > ? and state != 'disabled'");
         defer st.finalize();
-        try st.bindText(1, token_id);
+        try st.bindText(1, key_id);
         try st.bindInt(2, now);
         if (!try st.step()) return null;
         return try st.node(a);
     }
 
     /// The node whose unexpired node key has this token hash.
-    pub fn nodeByToken(db: *Db, a: std.mem.Allocator, token_hash: []const u8, now: i64) !?Node {
-        var st = try Stmt.prepare(db, node_select ++ " where tokenHash = ? and tokenExpires > ? and state != 'disabled'");
+    pub fn nodeByNodeKey(db: *Db, a: std.mem.Allocator, key_hash: []const u8, now: i64) !?Node {
+        var st = try Stmt.prepare(db, node_select ++ " where nodeKeyHash = ? and nodeKeyExpires > ? and state != 'disabled'");
         defer st.finalize();
-        try st.bindText(1, token_hash);
+        try st.bindText(1, key_hash);
         try st.bindInt(2, now);
         if (!try st.step()) return null;
         return try st.node(a);
     }
 
     /// The approved node with this hardware key.
-    pub fn nodeByKey(db: *Db, a: std.mem.Allocator, hardware_key: []const u8) !?Node {
+    pub fn nodeByHardwareKey(db: *Db, a: std.mem.Allocator, hardware_key: []const u8) !?Node {
         var st = try Stmt.prepare(db, node_select ++ " where hardwareKey = ? and state = 'approved'");
         defer st.finalize();
         try st.bindText(1, hardware_key);
@@ -1039,7 +1039,7 @@ pub const Db = struct {
 
     /// The node has received its approval: the node key is used up.
     pub fn nodeFinishRegistration(db: *Db, id: i64) NodeError!void {
-        var st = try Stmt.prepare(db, "update node set tokenHash = null, tokenExpires = null where nodeId = ? and state = 'approved'");
+        var st = try Stmt.prepare(db, "update node set nodeKeyHash = null, nodeKeyExpires = null where nodeId = ? and state = 'approved'");
         defer st.finalize();
         try st.bindInt(1, id);
         try st.done();
@@ -1128,22 +1128,22 @@ pub const Db = struct {
         \\  where ur.userId = u.userId and rr.module = 'terminal' and rr.action = 'connect'))
     ;
 
-    /// An admin gives `user_id` terminal access: a new invitation with
+    /// An admin gives `user_id` terminal access: a new access key with
     /// this token hash, usable until `token_expires`, with its limits. The
     /// access the user had before (its key, its sessions count) ends.
-    pub fn terminalInvite(db: *Db, user_id: i64, spec: TerminalSpec, token_hash: []const u8, token_expires: i64, now: i64) TerminalError!void {
+    pub fn terminalNewAccessKey(db: *Db, user_id: i64, spec: TerminalSpec, key_hash: []const u8, key_expires: i64, now: i64) TerminalError!void {
         if (spec.max_uses == null and spec.expires == null) return error.InvalidSpec;
         if (spec.max_uses) |m| if (m == 0) return error.InvalidSpec;
         if (!try db.hasId("select 1 from user where userId = ?", user_id)) return error.NotFound;
         var st = try Stmt.prepare(db,
-            \\insert or replace into terminal(userId, kind, userKey, tokenHash, tokenExpires, maxUses, expires, uses, revoked, created)
+            \\insert or replace into terminal(userId, kind, userKey, accessKeyHash, accessKeyExpires, maxUses, expires, uses, revoked, created)
             \\values(?, ?, null, ?, ?, ?, ?, 0, 0, ?)
         );
         defer st.finalize();
         try st.bindInt(1, user_id);
         try st.bindText(2, @tagName(spec.kind));
-        try st.bindText(3, token_hash);
-        try st.bindInt(4, token_expires);
+        try st.bindText(3, key_hash);
+        try st.bindInt(4, key_expires);
         try st.bindOptInt(5, if (spec.max_uses) |m| m else null);
         try st.bindOptInt(6, spec.expires);
         try st.bindInt(7, now);
@@ -1157,22 +1157,22 @@ pub const Db = struct {
         return try st.step();
     }
 
-    /// The access whose unused, unexpired invitation has this token id
-    /// (subject invite.<id>).
-    pub fn terminalByTokenId(db: *Db, a: std.mem.Allocator, token_id: []const u8, now: i64) !?Terminal {
-        var st = try Stmt.prepare(db, terminal_select ++ " where substr(t.tokenHash, 1, 16) = ? and t.tokenExpires > ? and t.userKey is null and " ++ may_connect);
+    /// The access whose unused, unexpired access key has this token id
+    /// (subject access.<id>).
+    pub fn terminalByAccessKeyId(db: *Db, a: std.mem.Allocator, key_id: []const u8, now: i64) !?Terminal {
+        var st = try Stmt.prepare(db, terminal_select ++ " where substr(t.accessKeyHash, 1, 16) = ? and t.accessKeyExpires > ? and t.userKey is null and " ++ may_connect);
         defer st.finalize();
-        try st.bindText(1, token_id);
+        try st.bindText(1, key_id);
         try st.bindInt(2, now);
         if (!try st.step()) return null;
         return try st.terminal(a);
     }
 
-    /// The access whose unused, unexpired invitation has this token hash.
-    pub fn terminalByToken(db: *Db, a: std.mem.Allocator, token_hash: []const u8, now: i64) !?Terminal {
-        var st = try Stmt.prepare(db, terminal_select ++ " where t.tokenHash = ? and t.tokenExpires > ? and t.userKey is null and " ++ may_connect);
+    /// The access whose unused, unexpired access key has this token hash.
+    pub fn terminalByAccessKey(db: *Db, a: std.mem.Allocator, key_hash: []const u8, now: i64) !?Terminal {
+        var st = try Stmt.prepare(db, terminal_select ++ " where t.accessKeyHash = ? and t.accessKeyExpires > ? and t.userKey is null and " ++ may_connect);
         defer st.finalize();
-        try st.bindText(1, token_hash);
+        try st.bindText(1, key_hash);
         try st.bindInt(2, now);
         if (!try st.step()) return null;
         return try st.terminal(a);
@@ -1196,7 +1196,7 @@ pub const Db = struct {
         return try st.terminal(a);
     }
 
-    /// The keys of users who have used their invitation but may not
+    /// The keys of users who have used their access key but may not
     /// connect any more (revoked, blocked, or no terminal:connect): their
     /// connections are to be closed.
     pub fn terminalKeysDenied(db: *Db, a: std.mem.Allocator) ![]const []const u8 {
@@ -1207,9 +1207,9 @@ pub const Db = struct {
         return list.toOwnedSlice(a);
     }
 
-    /// The invitation is used: bind the key and use up the token.
-    pub fn terminalRedeem(db: *Db, user_id: i64, user_key: []const u8) TerminalError!void {
-        var st = try Stmt.prepare(db, "update terminal set userKey = ?, tokenHash = null, tokenExpires = null where userId = ? and userKey is null");
+    /// The access key is used: bind the key and use up the token.
+    pub fn terminalUseAccessKey(db: *Db, user_id: i64, user_key: []const u8) TerminalError!void {
+        var st = try Stmt.prepare(db, "update terminal set userKey = ?, accessKeyHash = null, accessKeyExpires = null where userId = ? and userKey is null");
         defer st.finalize();
         try st.bindText(1, user_key);
         try st.bindInt(2, user_id);
@@ -1237,7 +1237,7 @@ pub const Db = struct {
     /// A node asks to open a session for the user with this key. Decided
     /// here, from the database: the user may connect (not blocked, access
     /// not revoked, terminal:connect from a role), the node matches one of
-    /// the user's node patterns, the invitation has not ended and has uses
+    /// the user's node patterns, the access key has not ended and has uses
     /// left. On success counts the use and records the session start. One
     /// transaction, so concurrent requests cannot exceed the uses.
     pub fn terminalUse(db: *Db, user_key: []const u8, node: []const u8, sid: []const u8, now: i64) Error!UseResult {
@@ -1412,10 +1412,10 @@ pub const Db = struct {
     }
 
     const session_select = "select sid, node, userKey, userName, started, ended, exitStatus from session";
-    const terminal_select = "select t.userId, u.name, t.kind, t.userKey, u.nodes, t.maxUses, t.expires, t.revoked, t.created, t.tokenExpires, t.uses " ++
+    const terminal_select = "select t.userId, u.name, t.kind, t.userKey, u.nodes, t.maxUses, t.expires, t.revoked, t.created, t.accessKeyExpires, t.uses " ++
         "from terminal t join user u on u.userId = t.userId";
 
-    const node_select = "select nodeId, name, description, state, hardwareKey, requestKey, status, created, lastSeen, tokenExpires, online from node";
+    const node_select = "select nodeId, name, description, state, hardwareKey, requestKey, status, created, lastSeen, nodeKeyExpires, online from node";
 
     fn mapUnique(db: *Db, e: Error) error{ Duplicate, SqliteError, OutOfMemory } {
         if (e == error.SqliteError) {
@@ -1507,7 +1507,7 @@ const Stmt = struct {
             .expires = st.optInt(6),
             .revoked = st.int(7) != 0,
             .created = st.int(8),
-            .token_expires = st.optInt(9),
+            .access_key_expires = st.optInt(9),
             .uses = st.int(10),
         };
     }
@@ -1529,7 +1529,7 @@ const Stmt = struct {
             .status = try st.optText(a, 6),
             .created = st.int(7),
             .last_seen = st.optInt(8),
-            .token_expires = st.optInt(9),
+            .node_key_expires = st.optInt(9),
             .online = st.int(10) != 0,
         };
     }
@@ -1559,28 +1559,28 @@ test "node registration: waiting, pending, approved" {
     try testing.expectEqual(NodeState.waiting, (try db.nodeGet(a, id)).?.state);
 
     // The node key works until it expires
-    try testing.expect((try db.nodeByToken(a, &th, t0)) != null);
-    try testing.expect((try db.nodeByToken(a, &th, t0 + 86400)) == null);
+    try testing.expect((try db.nodeByNodeKey(a, &th, t0)) != null);
+    try testing.expect((try db.nodeByNodeKey(a, &th, t0 + 86400)) == null);
     const other = tokenHash("OTHER");
-    try testing.expect((try db.nodeByToken(a, &other, t0)) == null);
+    try testing.expect((try db.nodeByNodeKey(a, &other, t0)) == null);
 
     // Registration request, then the admin approves
     try db.nodeRecordRequest(id, "UHWKEY", "{\"hostname\":\"box\"}", t0 + 10);
     const pending = (try db.nodeGet(a, id)).?;
     try testing.expectEqual(NodeState.pending, pending.state);
     try testing.expectEqualStrings("UHWKEY", pending.request_key.?);
-    try testing.expect((try db.nodeByKey(a, "UHWKEY")) == null);
+    try testing.expect((try db.nodeByHardwareKey(a, "UHWKEY")) == null);
 
     try db.nodeApprove(id);
-    const n = (try db.nodeByKey(a, "UHWKEY")).?;
+    const n = (try db.nodeByHardwareKey(a, "UHWKEY")).?;
     try testing.expectEqual(NodeState.approved, n.state);
     try testing.expectEqualStrings("ist_kadikoy_gw01", n.name);
     // The node key works until the node has been told, then it is used up
     const tid = core.code.tokenId("TOKEN1");
-    try testing.expect((try db.nodeByTokenId(a, &tid, t0)) != null);
+    try testing.expect((try db.nodeByNodeKeyId(a, &tid, t0)) != null);
     try db.nodeFinishRegistration(id);
-    try testing.expect((try db.nodeByToken(a, &th, t0)) == null);
-    try testing.expect((try db.nodeByTokenId(a, &tid, t0)) == null);
+    try testing.expect((try db.nodeByNodeKey(a, &th, t0)) == null);
+    try testing.expect((try db.nodeByNodeKeyId(a, &tid, t0)) == null);
     try testing.expectError(error.WrongState, db.nodeApprove(id));
 }
 
@@ -1630,18 +1630,18 @@ test "reject, disable, new node key, status, online, list, delete" {
     try testing.expectEqual(@as(?i64, t0 + 70), off.last_seen);
 
     try db.nodeSetDisabled(id, true);
-    try testing.expect((try db.nodeByKey(a, "URIGHT")) == null);
+    try testing.expect((try db.nodeByHardwareKey(a, "URIGHT")) == null);
     try db.nodeSetDisabled(id, false);
-    try testing.expect((try db.nodeByKey(a, "URIGHT")) != null);
+    try testing.expect((try db.nodeByHardwareKey(a, "URIGHT")) != null);
 
     // Hardware replaced: a new node key; the old key keeps working until approval
     const th2 = tokenHash("T2");
-    try db.nodeNewToken(id, &th2, t0 + 200);
-    try testing.expect((try db.nodeByKey(a, "URIGHT")) != null);
+    try db.nodeNewNodeKey(id, &th2, t0 + 200);
+    try testing.expect((try db.nodeByHardwareKey(a, "URIGHT")) != null);
     try db.nodeRecordRequest(id, "UNEWHW", "{}", t0 + 60);
     try db.nodeApprove(id);
-    try testing.expect((try db.nodeByKey(a, "URIGHT")) == null);
-    try testing.expect((try db.nodeByKey(a, "UNEWHW")) != null);
+    try testing.expect((try db.nodeByHardwareKey(a, "URIGHT")) == null);
+    try testing.expect((try db.nodeByHardwareKey(a, "UNEWHW")) != null);
 
     try testing.expectEqual(@as(usize, 1), (try db.nodeList(a)).len);
     try db.nodeDelete(id);
@@ -1659,7 +1659,7 @@ fn testTerminalUser(db: *Db, name: []const u8) !i64 {
     return id;
 }
 
-test "terminal access: invitation, redemption, uses, the user's nodes and sessions" {
+test "terminal access: access key, redemption, uses, the user's nodes and sessions" {
     var db = try testDb();
     defer db.close();
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -1669,19 +1669,19 @@ test "terminal access: invitation, redemption, uses, the user's nodes and sessio
     const th = tokenHash("INV");
     const id = try testTerminalUser(&db, "ali");
     try db.userSetNodes(id, "ist_*,pump??");
-    try db.terminalInvite(id, .{ .max_uses = 2 }, &th, t0 + 3600, t0);
-    const p = (try db.terminalByToken(a, &th, t0)).?;
+    try db.terminalNewAccessKey(id, .{ .max_uses = 2 }, &th, t0 + 3600, t0);
+    const p = (try db.terminalByAccessKey(a, &th, t0)).?;
     try testing.expectEqualStrings("ali", p.name);
     try testing.expectEqualStrings("ist_*,pump??", p.nodes);
     const tid = core.code.tokenId("INV");
-    try testing.expectEqual(id, (try db.terminalByTokenId(a, &tid, t0)).?.id);
+    try testing.expectEqual(id, (try db.terminalByAccessKeyId(a, &tid, t0)).?.id);
     try testing.expectEqual(@as(?[]const u8, null), p.user_key);
 
-    try db.terminalRedeem(id, "UALI");
-    // The invitation is used up; the key now identifies ali
-    try testing.expect((try db.terminalByToken(a, &th, t0)) == null);
+    try db.terminalUseAccessKey(id, "UALI");
+    // The access key is used up; the key now identifies ali
+    try testing.expect((try db.terminalByAccessKey(a, &th, t0)) == null);
     try testing.expectEqualStrings("ali", (try db.terminalByKey(a, "UALI")).?.name);
-    try testing.expectError(error.NotFound, db.terminalRedeem(id, "UOTHER"));
+    try testing.expectError(error.NotFound, db.terminalUseAccessKey(id, "UOTHER"));
 
     // Only the user's nodes
     try testing.expectEqualStrings("this node is not among the user's nodes", (try db.terminalUse("UALI", "ank_gw1", "S0", t0 + 5)).denied);
@@ -1694,12 +1694,12 @@ test "terminal access: invitation, redemption, uses, the user's nodes and sessio
     try testing.expectEqualStrings("unknown key", (try db.terminalUse("UMALLORY", "ist_gw1", "S4", t0)).denied);
     // The user's nodes change: they apply at once
     try db.userSetNodes(id, "");
-    try db.terminalInvite(id, .{ .max_uses = 5 }, &tokenHash("INV1B"), t0 + 3600, t0);
-    try db.terminalRedeem(id, "UALI2");
+    try db.terminalNewAccessKey(id, .{ .max_uses = 5 }, &tokenHash("INV1B"), t0 + 3600, t0);
+    try db.terminalUseAccessKey(id, "UALI2");
     try testing.expectEqualStrings("this node is not among the user's nodes", (try db.terminalUse("UALI2", "ist_gw1", "S5", t0)).denied);
     try db.userSetNodes(id, "*");
     try testing.expectEqual(Db.UseResult.allowed, try db.terminalUse("UALI2", "ank_gw1", "S6", t0));
-    // The key of the invitation before does not work any more
+    // The key of the access key before does not work any more
     try testing.expectEqualStrings("unknown key", (try db.terminalUse("UALI", "ist_gw1", "S7", t0)).denied);
     try testing.expectError(error.InvalidSpec, db.userSetNodes(id, "ist-*"));
 
@@ -1726,10 +1726,10 @@ test "terminal access: expiry, revocation, and the right to connect" {
     const th = tokenHash("INV2");
     const id = try testTerminalUser(&db, "bot1");
     try db.userSetNodes(id, "*");
-    try db.terminalInvite(id, .{ .kind = .bot, .expires = t0 + 60 }, &th, t0 + 10, t0);
-    // An invitation that is not used in time expires
-    try testing.expect((try db.terminalByToken(a, &th, t0 + 10)) == null);
-    try db.terminalRedeem(id, "UBOT");
+    try db.terminalNewAccessKey(id, .{ .kind = .bot, .expires = t0 + 60 }, &th, t0 + 10, t0);
+    // An access key that is not used in time expires
+    try testing.expect((try db.terminalByAccessKey(a, &th, t0 + 10)) == null);
+    try db.terminalUseAccessKey(id, "UBOT");
     try testing.expectEqual(Db.UseResult.allowed, try db.terminalUse("UBOT", "gw1", "B1", t0 + 59));
     try testing.expectEqualStrings("access expired", (try db.terminalUse("UBOT", "gw1", "B2", t0 + 60)).denied);
 
@@ -1747,19 +1747,19 @@ test "terminal access: expiry, revocation, and the right to connect" {
     try db.terminalRevoke(id);
     try testing.expect((try db.terminalByKey(a, "UBOT")) == null);
     try testing.expectEqualStrings("access revoked", (try db.terminalUse("UBOT", "gw1", "B3", t0)).denied);
-    // A new invitation gives access again, with a new key
-    try db.terminalInvite(id, .{ .max_uses = 1 }, &tokenHash("INV3"), t0 + 10, t0);
-    try testing.expect((try db.terminalByToken(a, &tokenHash("INV3"), t0)) != null);
+    // A new access key gives access again, with a new key
+    try db.terminalNewAccessKey(id, .{ .max_uses = 1 }, &tokenHash("INV3"), t0 + 10, t0);
+    try testing.expect((try db.terminalByAccessKey(a, &tokenHash("INV3"), t0)) != null);
 }
 
-test "an invitation needs a limit" {
+test "an access key needs a limit" {
     var db = try testDb();
     defer db.close();
     const th = tokenHash("X");
     const id = try testTerminalUser(&db, "xx");
-    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{}, &th, t0 + 1, t0));
-    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{ .max_uses = 0 }, &th, t0 + 1, t0));
-    try testing.expectError(error.NotFound, db.terminalInvite(999, .{ .max_uses = 1 }, &th, t0 + 1, t0));
+    try testing.expectError(error.InvalidSpec, db.terminalNewAccessKey(id, .{}, &th, t0 + 1, t0));
+    try testing.expectError(error.InvalidSpec, db.terminalNewAccessKey(id, .{ .max_uses = 0 }, &th, t0 + 1, t0));
+    try testing.expectError(error.NotFound, db.terminalNewAccessKey(999, .{ .max_uses = 1 }, &th, t0 + 1, t0));
 }
 
 test "settings and session logs" {

@@ -1,4 +1,4 @@
-//! First contact with a relay from a node key or an invitation.
+//! First contact with a relay from a node key or an access key.
 //!
 //! The code carries only the SHA-256 of termgate's CA. fetchCa connects
 //! without certificate verification, asks for the CA (ca.get, allowed for any

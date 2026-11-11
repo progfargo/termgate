@@ -1,4 +1,4 @@
-//! Node keys and invitations: the one-line codes termgate hands out.
+//! Node keys and access keys: the one-line codes termgate hands out.
 //!
 //!   tg1-<relay host>:<port>-<CA fingerprint>-<token>
 //!

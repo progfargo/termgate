@@ -32,8 +32,8 @@ pub const Error = error{
 /// Registers this node. Connections use `gpa` (each holds large buffers and
 /// attempts may repeat for long); strings of the returned config live in
 /// `arena`.
-pub fn register(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, code_text: []const u8, key: core.nkeys.KeyPair, root: Io.Dir, opts: Options) !Config {
-    const code = try core.code.parse(code_text);
+pub fn register(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, node_key: []const u8, key: core.nkeys.KeyPair, root: Io.Dir, opts: Options) !Config {
+    const code = try core.code.parse(node_key);
     const kpub = key.publicKey().encode();
     const inbox = try std.fmt.allocPrint(arena, "_INBOX.{s}", .{kpub});
 

@@ -29,7 +29,7 @@ const Terminal = struct {
     expires: ?i64 = null,
     revoked: bool = false,
     created: i64 = 0,
-    token_expires: ?i64 = null,
+    access_key_expires: ?i64 = null,
     uses: i64 = 0,
 };
 const User = struct { id: i64, name: []const u8, superuser: bool = false, disabled: bool = false, second_step: bool = false, created: i64 = 0, nodes: []const u8 = "", roles: []const RoleRef = &.{}, terminal: ?Terminal = null };
@@ -97,7 +97,8 @@ fn toolbar(b: *app.Buf, u: User, size: []const u8, tab: Tab) void {
         .{ .tab = .edit, .path = "#/user/update", .label = "Edit", .title = "Edit record.", .show = !u.superuser and state.can("user", "update") },
         .{ .tab = .roles, .path = "#/user/role", .label = "Roles", .title = "Edit user roles.", .show = !u.superuser and state.can("user", "role_browse") },
         .{ .tab = .new_pass, .path = "#/user/update_pass", .label = "New Pass", .title = "Give the user a new password.", .show = !u.superuser and state.can("user", "update_pass") },
-        .{ .tab = .terminal, .path = "#/user/terminal", .label = "Terminal", .title = "Terminal access with tgterm.", .show = state.can("user", "access") },
+        // Only on the user's own pages, not in the list
+        .{ .tab = .terminal, .path = "#/user/terminal", .label = "Access Key", .title = "A terminal access key: the user signs in to tgterm with it once.", .show = tab != .none and state.can("user", "access") },
         .{ .tab = .delete, .path = "#/user/delete", .label = "Delete", .title = "Delete record.", .show = !u.superuser and !own and state.can("user", "delete"), .class = "error" },
     };
     // Act as the user: not oneself, not a blocked user, the superuser
@@ -512,8 +513,8 @@ fn terminalLabel(b: *app.Buf, t: ?Terminal) void {
     const x = t orelse return b.raw("-");
     if (x.revoked) return content.label(b, "error", "revoked");
     if (x.user_key != null) return content.label(b, "success", if (std.mem.eql(u8, x.kind, "bot")) "active (bot)" else "active");
-    if (x.token_expires) |e| if (e <= app.now()) return content.label(b, "warning", "invitation expired");
-    content.label(b, "primary", "invited");
+    if (x.access_key_expires) |e| if (e <= app.now()) return content.label(b, "warning", "key expired");
+    content.label(b, "primary", "key not used yet");
 }
 
 pub fn terminal(query: []const u8) void {
@@ -523,12 +524,12 @@ pub fn terminal(query: []const u8) void {
     renderTerminal(.{});
 }
 
-const Invite = struct { bot: bool = false, uses: []const u8 = "", days: []const u8 = "" };
+const KeyForm = struct { bot: bool = false, uses: []const u8 = "", days: []const u8 = "" };
 
-fn renderTerminal(form: Invite) void {
+fn renderTerminal(form: KeyForm) void {
     const u = userById(edit_id) orelse return;
     var b: app.Buf = .{};
-    recordHeader(&b, u, .terminal, "Terminal");
+    recordHeader(&b, u, .terminal, "Access Key");
     content.contentStart(&b);
     b.raw("<p>Terminal access: this user connects with tgterm, like ssh, to its nodes (Edit). It also needs a role with the right terminal:connect (such as terminal_user).</p>");
     if (u.terminal) |t| {
@@ -548,21 +549,21 @@ fn renderTerminal(form: Invite) void {
         b.raw("<button type=\"button\" data-action=\"userTerminalRevoke\" class=\"button button-error button-sm\">Revoke</button>");
         content.commandEnd(&b);
     };
-    // A new invitation (replaces what the user had)
+    // A new access key (replaces what the user had)
     b.raw("<div class=\"row row-header\"><div class=\"col\"><div class=\"page-title\"><h3>Give terminal access</h3></div></div></div>");
     content.contentStart(&b);
     b.raw("<form>");
     content.field(&b, "term-uses-input", "Sessions:", form.uses, .{ .max = 6, .help = "How many sessions; empty: no limit (then give days)." });
     content.field(&b, "term-days-input", "Days:", form.days, .{ .max = 4, .help = "Valid for this many days; empty: no end (then give sessions)." });
     content.checkbox(&b, "term-bot-input", "A bot (a program)", form.bot);
-    b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userTerminalInvite\" class=\"button button-primary button-sm\">Make invitation</button></div></div>");
+    b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userAccessKey\" class=\"button button-primary button-sm\">Make access key</button></div></div>");
     b.raw("</form>");
     content.contentEnd(&b);
     content.show(&b);
 }
 
-pub fn submitTerminalInvite(f: Form) void {
-    const form: Invite = .{ .bot = f.checked("term-bot-input"), .uses = f.trimmed("term-uses-input"), .days = f.trimmed("term-days-input") };
+pub fn submitAccessKey(f: Form) void {
+    const form: KeyForm = .{ .bot = f.checked("term-bot-input"), .uses = f.trimmed("term-uses-input"), .days = f.trimmed("term-days-input") };
     const number = struct {
         fn get(text: []const u8) error{Invalid}!?u32 {
             if (text.len == 0) return null;
@@ -578,16 +579,16 @@ pub fn submitTerminalInvite(f: Form) void {
         state.say("warning", "Days is a whole number above 0, or empty.");
         return renderTerminal(form);
     };
-    const answer = fetch.post("user/terminal_invite", .{ .id = edit_id, .bot = form.bot, .uses = uses, .days = days }) orelse return;
+    const answer = fetch.post("user/access_key", .{ .id = edit_id, .bot = form.bot, .uses = uses, .days = days }) orelse return;
     if (fetch.refused()) {
         state.keepMessages();
         return renderTerminal(form);
     }
-    const code = (fetch.fieldAs(struct { code: []const u8 }, answer, "data") orelse return).code;
+    const access_key = (fetch.fieldAs(struct { key: []const u8 }, answer, "data") orelse return).key;
     const u = userById(edit_id) orelse return;
-    const command = std.fmt.allocPrint(app.arena(), "tgterm --invite {s}", .{code}) catch return;
+    const command = std.fmt.allocPrint(app.arena(), "tgterm --access-key {s}", .{access_key}) catch return;
     var b: app.Buf = .{};
-    recordHeader(&b, u, .terminal, "Invitation");
+    recordHeader(&b, u, .terminal, "Access Key");
     content.contentStart(&b);
     b.add("<p>Shown once. Hand it to <strong>{f}</strong>: it runs this once, within 7 days, on its own machine; tgterm makes its key there. After that \"tgterm &lt;node&gt;\" is enough.</p>", .{app.esc(u.name)});
     b.add("<pre class=\"wrap\">{f}</pre>", .{app.esc(command)});

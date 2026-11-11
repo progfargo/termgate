@@ -3,8 +3,8 @@
 //! will do on the relay:
 //!   - answers the auth callout for every connection (known nodes, users,
 //!     itself, a registering node with its node key, a user with an
-//!     invitation, anyone else: ca.get only)
-//!   - serves ca.get, register.<token id>, invite.<token id>,
+//!     access key, anyone else: ca.get only)
+//!   - serves ca.get, register.<token id>, access.<token id>,
 //!     authorize.<node> and audit.<node>
 //! Admin decisions are automatic: registrations are approved on the second
 //! request, sessions are approved unless `deny_sessions` is set. Not used in
@@ -40,8 +40,8 @@ pub const Termgate = struct {
     reg_token: ?[]const u8 = null,
     reg_name: []const u8 = "",
     reg_requests: u32 = 0,
-    /// One open invitation (its token)
-    invite_token: ?[]const u8 = null,
+    /// One open access key (its token)
+    access_token: ?[]const u8 = null,
     deny_sessions: bool = false,
     /// PEM of the test CA (the caller embeds lib/core/testdata/ca.pem)
     ca_pem: []const u8,
@@ -71,7 +71,7 @@ pub const Termgate = struct {
             try t.app.subscribe("register.*"),
             try t.app.subscribe("authorize.*"),
             try t.app.subscribe("audit.*"),
-            try t.app.subscribe("invite.*"),
+            try t.app.subscribe("access.*"),
         };
         try t.app.flush(Conn.seconds(5));
         try t.tasks.concurrent(io, appLoop, .{ t, subs });
@@ -100,11 +100,11 @@ pub const Termgate = struct {
         t.user_count += 1;
     }
 
-    /// The admin invited someone with this token.
-    pub fn expectInvitation(t: *Termgate, token: []const u8) void {
+    /// The admin gave someone an access key with this token.
+    pub fn expectAccessKey(t: *Termgate, token: []const u8) void {
         t.mutex.lockUncancelable(t.io);
         defer t.mutex.unlock(t.io);
-        t.invite_token = token;
+        t.access_token = token;
     }
 
     /// The admin created node `name` and got this node key token.
@@ -163,9 +163,9 @@ pub const Termgate = struct {
                     const id = core.code.tokenId(tok);
                     break :blk .{ .allow = .{ .name = "registering", .account = "APP", .permissions = try core.perms.registering(a, &id, k) } };
                 };
-                if (t.invite_token) |want| if (std.mem.eql(u8, tok, want)) {
+                if (t.access_token) |want| if (std.mem.eql(u8, tok, want)) {
                     const id = core.code.tokenId(tok);
-                    break :blk .{ .allow = .{ .name = "invited", .account = "APP", .permissions = try core.perms.redeeming(a, &id, k) } };
+                    break :blk .{ .allow = .{ .name = "access-key", .account = "APP", .permissions = try core.perms.usingAccessKey(a, &id, k) } };
                 };
                 break :blk .{ .deny = "unknown or used token" };
             }
@@ -193,7 +193,7 @@ pub const Termgate = struct {
                         if (std.mem.indexOf(u8, m.payload, "\"event\":\"end\"") != null) _ = t.session_ends.fetchAdd(1, .release);
                         break :blk t.app.publish(reply, "ok");
                     },
-                    else => t.answerInvite(m, reply),
+                    else => t.answerAccessKey(m, reply),
                 };
                 answer catch |e| std.log.warn("test termgate: {s}", .{@errorName(e)});
             }
@@ -218,9 +218,9 @@ pub const Termgate = struct {
         try t.app.publish(reply, body);
     }
 
-    /// An invitation is used: bind the key to the user, mark the token
+    /// An access key is used: bind the key to the user, mark the token
     /// used, answer with termgate's issuer key (which signs approvals).
-    fn answerInvite(t: *Termgate, m: Conn.Message, reply: []const u8) !void {
+    fn answerAccessKey(t: *Termgate, m: Conn.Message, reply: []const u8) !void {
         var arena: std.heap.ArenaAllocator = .init(t.gpa);
         defer arena.deinit();
         const a = arena.allocator();
@@ -229,7 +229,7 @@ pub const Termgate = struct {
         const k = core.nkeys.PublicKey.decode(req.user_key) catch return error.InvalidKey;
         if (k.prefix != .user) return error.InvalidKey;
         t.mutex.lockUncancelable(t.io);
-        t.invite_token = null; // single use
+        t.access_token = null; // single use
         t.mutex.unlock(t.io);
         t.addUser(req.user_key);
         try t.app.publish(reply, try std.json.Stringify.valueAlloc(a, .{ .issuer = @as([]const u8, &t.issuer_pub) }, .{}));

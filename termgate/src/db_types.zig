@@ -17,8 +17,8 @@ pub const NodeState = enum {
     disabled,
 };
 
-/// A user's terminal access: the invitation an admin made (tgterm --invite)
-/// with its limits, and the user's key once the invitation is used.
+/// A user's terminal access: the access key an admin made (tgterm --access-key)
+/// with its limits, and the user's key once the access key is used.
 /// Connecting also needs the right terminal:connect from the user's roles.
 pub const Terminal = struct {
     /// The user's id
@@ -26,18 +26,18 @@ pub const Terminal = struct {
     /// The user's name
     name: []const u8,
     kind: TerminalKind,
-    /// Set once the invitation is used
+    /// Set once the access key is used
     user_key: ?[]const u8,
     /// The user's node patterns, comma separated (user.nodes)
     nodes: []const u8,
-    /// Sessions the invitation allows; null: no limit
+    /// Sessions the access key allows; null: no limit
     max_uses: ?i64,
-    /// When the invitation's access ends; null: no end
+    /// When the access key's access ends; null: no end
     expires: ?i64,
     revoked: bool,
     created: i64,
-    /// Until when the invitation may be used (unused invitations)
-    token_expires: ?i64,
+    /// Until when the access key may be used (unused access keys)
+    access_key_expires: ?i64,
     /// Sessions opened so far
     uses: i64,
 };
@@ -136,14 +136,14 @@ pub const Node = struct {
     /// When the node was last known to be connected
     last_seen: ?i64,
     /// Until when the node key may be used
-    token_expires: ?i64,
+    node_key_expires: ?i64,
     /// Connected to the relay right now (from the relay's connection events)
     online: bool,
 };
 
 /// What termgate stores instead of a code's token: its SHA-256, base32
 /// (core.code.tokenDigest). Its first 16 characters are the token id used in
-/// subjects (register.<id>, invite.<id>).
+/// subjects (register.<id>, access.<id>).
 pub fn tokenHash(token: []const u8) [core.code.part_len]u8 {
     return core.code.tokenDigest(token);
 }
@@ -167,11 +167,11 @@ pub const TerminalError = error{ InvalidSpec, NotFound, Duplicate } || Error;
 /// A person or a program (a bot) using tgterm.
 pub const TerminalKind = enum { human, bot };
 
-/// An invitation's limits: how many sessions and/or until when. Which
+/// An access key's limits: how many sessions and/or until when. Which
 /// nodes is the user's (user.nodes).
 pub const TerminalSpec = struct {
     kind: TerminalKind = .human,
     max_uses: ?u32 = null,
-    /// When the access ends; an invitation needs this, max_uses or both
+    /// When the access ends; an access key needs this, max_uses or both
     expires: ?i64 = null,
 };

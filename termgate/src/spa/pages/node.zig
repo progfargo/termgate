@@ -25,7 +25,7 @@ pub const Node = struct {
     status: ?[]const u8 = null,
     created: i64 = 0,
     last_seen: ?i64 = null,
-    token_expires: ?i64 = null,
+    node_key_expires: ?i64 = null,
     online: bool = false,
 };
 
@@ -313,10 +313,10 @@ pub fn newKey(f: Form) void {
 }
 
 /// The node key, once, with the command for the device.
-const Key = struct { id: i64, code: []const u8 };
+const Key = struct { id: i64, key: []const u8 };
 
 fn showKey(n: Node, key: Key) void {
-    const command = std.fmt.allocPrint(app.arena(), "tgnode --node-key {s}", .{key.code}) catch return;
+    const command = std.fmt.allocPrint(app.arena(), "tgnode --node-key {s}", .{key.key}) catch return;
     var b: app.Buf = .{};
     recordHeader(&b, n, .new_key);
     content.contentStart(&b);
@@ -371,7 +371,7 @@ pub fn display(query: []const u8) void {
     b.add("</td></tr><tr><th>Last seen:</th><td>{s}</td></tr><tr><th>Added:</th><td>{s}</td></tr>", .{ ago(n.last_seen), content.dateTime(n.created) });
     if (n.hardware_key) |k| b.add("<tr><th>Hardware key:</th><td><small>{f}</small></td></tr>", .{app.esc(k)});
     if (n.request_key) |k| b.add("<tr><th>Asks to register with:</th><td><small>{f}</small></td></tr>", .{app.esc(k)});
-    if (std.mem.eql(u8, n.state, "waiting")) if (n.token_expires) |t| b.add("<tr><th>Node key valid until:</th><td>{s} UTC</td></tr>", .{content.dateTime(t)});
+    if (std.mem.eql(u8, n.state, "waiting")) if (n.node_key_expires) |t| b.add("<tr><th>Node key valid until:</th><td>{s} UTC</td></tr>", .{content.dateTime(t)});
     if (statusOf(n)) |st| {
         b.add("<tr><th>Hostname:</th><td>{f}</td></tr><tr><th>System:</th><td>{f}, kernel {f}, {f}, {d} CPUs</td></tr>", .{ app.esc(st.hostname), app.esc(st.os), app.esc(st.kernel), app.esc(st.arch), st.cpus });
         const used = st.mem_total_kb -| st.mem_available_kb;

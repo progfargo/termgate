@@ -1,10 +1,10 @@
-//! Using an invitation (tgterm --invite tg1-...).
+//! Using a terminal access key (tgterm --access-key tg1-...).
 //!
 //! 1. Generate the user's key pair; the private key never leaves this machine.
-//! 2. Fetch termgate's CA and check it against the invitation's fingerprint
+//! 2. Fetch termgate's CA and check it against the access key's fingerprint
 //!    (core.bootstrap.fetchCa); nothing secret is sent before that.
-//! 3. Connect, verifying the relay, with the invitation's token as auth token,
-//!    and send the public key to invite.<token id>. termgate binds the key to
+//! 3. Connect, verifying the relay, with the access key's token as auth token,
+//!    and send the public key to access.<token id>. termgate binds the key to
 //!    the user, uses up the token and answers with its issuer key (which
 //!    signs session approvals).
 //! 4. Return the profile to store.
@@ -16,14 +16,14 @@ const Conn = core.nats.Conn;
 const Profile = @import("profile.zig").Profile;
 
 pub const Error = error{
-    /// termgate refused the invitation (unknown, used or expired)
+    /// termgate refused the access key (unknown, used or expired)
     Refused,
 };
 
-/// Uses an invitation. Connections use `gpa`; strings of the returned profile
+/// Uses a terminal access key. Connections use `gpa`; strings of the returned profile
 /// live in `arena`.
-pub fn redeem(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, code_text: []const u8) !Profile {
-    const code = try core.code.parse(code_text);
+pub fn use(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, access_key: []const u8) !Profile {
+    const code = try core.code.parse(access_key);
     const key = try core.nkeys.KeyPair.generate(.user, io);
     const kpub = key.publicKey().encode();
     const inbox = try std.fmt.allocPrint(arena, "_INBOX.{s}", .{kpub});
@@ -46,7 +46,7 @@ pub fn redeem(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, code_tex
 
     const token_id = core.code.tokenId(code.token);
     var subj_buf: [64]u8 = undefined;
-    const subject = try std.fmt.bufPrint(&subj_buf, "invite.{s}", .{&token_id});
+    const subject = try std.fmt.bufPrint(&subj_buf, "access.{s}", .{&token_id});
     const body = try std.json.Stringify.valueAlloc(arena, .{ .user_key = @as([]const u8, &kpub) }, .{});
     const m = conn.request(subject, body, Conn.seconds(15)) catch |e| switch (e) {
         error.NoResponders, error.Timeout => return error.TermgateOffline,

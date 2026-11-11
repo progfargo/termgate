@@ -57,7 +57,7 @@ const routes = [_]Route{
     .{ .path = "node/status_all", .call = "svc.requestStatus" },
     .{ .path = "node/sessions", .call = "db.sessionsOfNode" },
     // A user's terminal access
-    .{ .path = "user/terminal_invite", .call = "terminal.invite" },
+    .{ .path = "user/access_key", .call = "terminal.accessKey" },
     .{ .path = "user/terminal_revoke", .call = "terminal.revoke" },
     // Sessions
     .{ .path = "session/browse", .call = "db.sessionsActive" },

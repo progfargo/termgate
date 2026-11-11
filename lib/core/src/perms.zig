@@ -45,11 +45,11 @@ pub fn registering(arena: std.mem.Allocator, token_id: []const u8, key: []const 
     return .{ .@"pub" = .{ .allow = pubs }, .sub = .{ .allow = subs } };
 }
 
-/// Someone using an invitation: may only send their public key to
-/// invite.<token id> and read the answer (termgate's issuer key).
-pub fn redeeming(arena: std.mem.Allocator, token_id: []const u8, key: []const u8) !jwt.UserNats {
+/// Someone using an access key: may only send their public key to
+/// access.<token id> and read the answer (termgate's issuer key).
+pub fn usingAccessKey(arena: std.mem.Allocator, token_id: []const u8, key: []const u8) !jwt.UserNats {
     const pubs = try arena.alloc([]const u8, 1);
-    pubs[0] = try std.fmt.allocPrint(arena, "invite.{s}", .{token_id});
+    pubs[0] = try std.fmt.allocPrint(arena, "access.{s}", .{token_id});
     const subs = try arena.alloc([]const u8, 1);
     subs[0] = try std.fmt.allocPrint(arena, "_INBOX.{s}.>", .{key});
     return .{ .@"pub" = .{ .allow = pubs }, .sub = .{ .allow = subs } };

@@ -1,4 +1,4 @@
-//! Invitation tests against the relay's real setup (TLS + auth callout,
+//! Terminal access key tests against the relay's real setup (TLS + auth callout,
 //! lib/core/testdata/nats-callout-tls.conf) with core.standin standing in for
 //! termgate. Run with `zig build test -Dnats-test`.
 
@@ -7,24 +7,24 @@ const testing = std.testing;
 const core = @import("core");
 const Conn = core.nats.Conn;
 const tg = core.standin;
-const invite = @import("invite.zig");
+const access_key = @import("access_key.zig");
 const test_ca = @embedFile("test_ca");
 
-test "an invitation gives a key and user permissions; it works once" {
+test "an access key gives a key and user permissions; it works once" {
     const a = testing.allocator;
     const io = testing.io;
     const t = try tg.Termgate.start(a, io, test_ca);
     defer t.stop();
 
-    // The admin invites someone
+    // The admin gives someone an access key
     const fp = try core.code.caFingerprint(a, test_ca);
-    const invitation = try core.code.format(a, "127.0.0.1", tg.port, fp, @splat(0x61));
-    defer a.free(invitation);
-    t.expectInvitation((try core.code.parse(invitation)).token);
+    const access_key_text = try core.code.format(a, "127.0.0.1", tg.port, fp, @splat(0x61));
+    defer a.free(access_key_text);
+    t.expectAccessKey((try core.code.parse(access_key_text)).token);
 
     var arena: std.heap.ArenaAllocator = .init(a);
     defer arena.deinit();
-    const p = try invite.redeem(a, arena.allocator(), io, invitation);
+    const p = try access_key.use(a, arena.allocator(), io, access_key_text);
     try testing.expectEqualStrings("127.0.0.1", p.relay_host);
     try testing.expectEqualStrings(test_ca, p.ca_pem);
 
@@ -46,21 +46,21 @@ test "an invitation gives a key and user permissions; it works once" {
     try conn.flush(Conn.seconds(5));
     try testing.expectEqualStrings("", conn.lastError());
 
-    // The invitation cannot be used a second time
-    try testing.expectError(error.Refused, invite.redeem(a, arena.allocator(), io, invitation));
+    // The access key cannot be used a second time
+    try testing.expectError(error.Refused, access_key.use(a, arena.allocator(), io, access_key_text));
 }
 
-test "an invitation for a different relay CA sends no token" {
+test "an access key for a different relay CA sends no token" {
     const a = testing.allocator;
     const io = testing.io;
     const t = try tg.Termgate.start(a, io, test_ca);
     defer t.stop();
-    const invitation = try core.code.format(a, "127.0.0.1", tg.port, @splat(7), @splat(0x62));
-    defer a.free(invitation);
-    t.expectInvitation((try core.code.parse(invitation)).token);
+    const access_key_text = try core.code.format(a, "127.0.0.1", tg.port, @splat(7), @splat(0x62));
+    defer a.free(access_key_text);
+    t.expectAccessKey((try core.code.parse(access_key_text)).token);
     var arena: std.heap.ArenaAllocator = .init(a);
     defer arena.deinit();
-    try testing.expectError(error.WrongCa, invite.redeem(a, arena.allocator(), io, invitation));
-    // The token was never presented, so the invitation is still open
-    try testing.expect(t.invite_token != null);
+    try testing.expectError(error.WrongCa, access_key.use(a, arena.allocator(), io, access_key_text));
+    // The token was never presented, so the access key is still open
+    try testing.expect(t.access_token != null);
 }

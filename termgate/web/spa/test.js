@@ -151,8 +151,8 @@
     await go("#/user/terminal?userId=" + veli);
     await wait("the terminal page", () => $("#term-uses-input"));
     fill("term-uses-input", "2");
-    await click("[data-action=userTerminalInvite]");
-    await wait("the invitation", () => text("pre").startsWith("tgterm --invite tg1-"));
+    await click("[data-action=userAccessKey]");
+    await wait("the access key", () => text("pre").startsWith("tgterm --access-key tg1-"));
 
     step = "acting as veli";
     await go("#/user");

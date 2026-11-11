@@ -15,7 +15,7 @@ table caption {
     padding: var(--u2) 0 0 0;
 }
 
-/* A long command (a node key, an invitation) wraps instead of widening
+/* A long command (a node key, an access key) wraps instead of widening
    the page */
 pre.wrap {
     white-space: pre-wrap;

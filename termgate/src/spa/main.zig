@@ -85,7 +85,7 @@ const actions = [_]Action{
     .{ .name = "userDelete", .run = user.submitDelete },
     .{ .name = "userSelect", .run = user.select },
     .{ .name = "userUnselect", .run = user.unselect },
-    .{ .name = "userTerminalInvite", .run = user.submitTerminalInvite },
+    .{ .name = "userAccessKey", .run = user.submitAccessKey },
     .{ .name = "userTerminalRevoke", .run = user.submitTerminalRevoke },
     .{ .name = "roleInsert", .run = role.submitInsert },
     .{ .name = "roleUpdate", .run = role.submitUpdate },

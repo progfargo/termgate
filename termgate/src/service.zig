@@ -5,7 +5,7 @@
 //!     $SYS.REQ.USER.AUTH for every client connection;
 //!   - the application connection, which termgate's own callout lets into the
 //!     account where nodes and users are, serves ca.get, register.<id>,
-//!     invite.<id>, authorize.<node>, audit.<node>, records status.<node>,
+//!     access.<id>, authorize.<node>, audit.<node>, records status.<node>,
 //!     and follows every session (out.*.*.*.*, in.*.*.*.data) into the
 //!     recorder, which writes the session logs;
 //!   - the system connection (termgate's user in the SYS account) follows
@@ -143,7 +143,7 @@ pub const Service = struct {
         const subs: AppSubs = .{
             try s.app.subscribe("ca.get"),
             try s.app.subscribe("register.*"),
-            try s.app.subscribe("invite.*"),
+            try s.app.subscribe("access.*"),
             try s.app.subscribe("authorize.*"),
             try s.app.subscribe("audit.*"),
             try s.app.subscribe("status.*"),
@@ -253,21 +253,21 @@ pub const Service = struct {
 
         s.lock.lockUncancelable(s.io);
         defer s.lock.unlock(s.io);
-        // A code (node key or invitation) decides first: a node that has just
+        // A code (node key or access key) decides first: a node that has just
         // been approved still needs registering permissions to hear about it
         if (r.connect_opts.auth_token) |tok| {
             const hash = dbm.tokenHash(tok);
             const id = core.code.tokenId(tok);
-            if (try s.db.nodeByToken(a, &hash, s.now())) |_|
+            if (try s.db.nodeByNodeKey(a, &hash, s.now())) |_|
                 return .{ .allow = .{ .name = "registering", .account = account, .permissions = try core.perms.registering(a, &id, k) } };
-            if (try s.db.terminalByToken(a, &hash, s.now())) |_|
-                return .{ .allow = .{ .name = "invited", .account = account, .permissions = try core.perms.redeeming(a, &id, k) } };
+            if (try s.db.terminalByAccessKey(a, &hash, s.now())) |_|
+                return .{ .allow = .{ .name = "access-key", .account = account, .permissions = try core.perms.usingAccessKey(a, &id, k) } };
             return .{ .deny = "unknown, used or expired code" };
         }
         // The name shows in the relay's connection list, where termgate finds
         // connections to mark online or to close: node:<name> (unique) and
         // user:<key>; only users who may connect (terminal:connect)
-        if (try s.db.nodeByKey(a, k)) |n|
+        if (try s.db.nodeByHardwareKey(a, k)) |n|
             return .{ .allow = .{ .name = try std.fmt.allocPrint(a, "{s}{s}", .{ node_prefix, n.name }), .account = account, .permissions = try core.perms.node(a, n.name) } };
         if (try s.db.terminalByKey(a, k)) |_|
             return .{ .allow = .{ .name = try std.fmt.allocPrint(a, "{s}{s}", .{ user_prefix, k }), .account = account, .permissions = try core.perms.user(a, k) } };
@@ -436,7 +436,7 @@ pub const Service = struct {
                 const result = switch (i) {
                     0 => s.answerCaGet(m),
                     1 => s.answerRegister(m),
-                    2 => s.answerInvite(m),
+                    2 => s.answerAccessKey(m),
                     3 => s.answerAuthorize(m),
                     4 => s.answerAudit(m),
                     else => s.recordStatus(m),
@@ -649,7 +649,7 @@ pub const Service = struct {
 
         s.lock.lockUncancelable(s.io);
         defer s.lock.unlock(s.io);
-        const n = (try s.db.nodeByTokenId(a, lastToken(m.subject), s.now())) orelse
+        const n = (try s.db.nodeByNodeKeyId(a, lastToken(m.subject), s.now())) orelse
             return s.reply(m, "{\"status\":\"refused\",\"reason\":\"unknown or expired node key\"}");
 
         if (n.state == .approved) {
@@ -664,8 +664,8 @@ pub const Service = struct {
         try s.reply(m, "{\"status\":\"pending\"}");
     }
 
-    /// invite.<token id>: someone uses an invitation with their new key.
-    fn answerInvite(s: *Service, m: Conn.Message) !void {
+    /// access.<token id>: someone uses an access key with their new key.
+    fn answerAccessKey(s: *Service, m: Conn.Message) !void {
         var arena: std.heap.ArenaAllocator = .init(s.gpa);
         defer arena.deinit();
         const a = arena.allocator();
@@ -676,12 +676,12 @@ pub const Service = struct {
 
         s.lock.lockUncancelable(s.io);
         defer s.lock.unlock(s.io);
-        const p = (try s.db.terminalByTokenId(a, lastToken(m.subject), s.now())) orelse
-            return s.reply(m, "{\"error\":\"unknown, used or expired invitation\"}");
+        const p = (try s.db.terminalByAccessKeyId(a, lastToken(m.subject), s.now())) orelse
+            return s.reply(m, "{\"error\":\"unknown, used or expired access key\"}");
         // The key now stands for the user; everything else stays in the
         // database. tgterm gets only the key that signs the approvals.
-        try s.db.terminalRedeem(p.id, req.user_key);
-        log.info("invitation used by {s}", .{p.name});
+        try s.db.terminalUseAccessKey(p.id, req.user_key);
+        log.info("access key used by {s}", .{p.name});
         try s.reply(m, try std.json.Stringify.valueAlloc(a, .{ .issuer = @as([]const u8, &s.issuer_pub) }, .{}));
     }
 

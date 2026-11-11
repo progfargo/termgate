@@ -1,5 +1,5 @@
 //! termgate, the server program. The authority (auth callout, node
-//! registration, invitations, session approvals, session logs, audit) runs
+//! registration, access keys, session approvals, session logs, audit) runs
 //! here around the clock, and the web panel is served from here: the UI
 //! (WASM, zig-out/web) and the API it calls. HTTPS is nginx's job; termgate
 //! listens on localhost.

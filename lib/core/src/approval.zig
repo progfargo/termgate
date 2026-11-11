@@ -3,7 +3,7 @@
 //! After verifying a session request (session.zig), tgnode sends an approval
 //! request to authorize.<node>: the user's key, the node, the request's nonce
 //! and the session id it chose. termgate decides from its database (the
-//! user's terminal access, its node patterns, the invitation's uses and end),
+//! user's terminal access, its node patterns, the access key's uses and end),
 //! counts the use, records the start and replies with an approval: a JWT
 //! signed by the account key whose nats section has type "approval" and
 //! echoes user, node, nonce and sid. tgnode accepts only an approval that is

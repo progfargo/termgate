@@ -25,7 +25,7 @@ pub const Options = struct {
     /// Key that signs the server nonce (an nkey user, or a client the
     /// auth callout identifies by its key)
     key: ?nkeys.KeyPair = null,
-    /// Auth token sent in CONNECT (auth callout: node key or invitation)
+    /// Auth token sent in CONNECT (auth callout: node key or access key)
     token: ?[]const u8 = null,
     /// Client name shown in server monitoring
     name: []const u8 = "termgate",

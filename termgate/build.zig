@@ -65,7 +65,7 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = recorder_module })).step);
 
-    // termgate on the relay: auth callout, registration, invitations,
+    // termgate on the relay: auth callout, registration, access keys,
     // approvals, audit
     const service_module = b.createModule(.{
         .root_source_file = b.path("src/service.zig"),

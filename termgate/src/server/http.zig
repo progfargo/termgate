@@ -33,11 +33,9 @@ const cookie_name = "tg_session";
 /// The only files served, with their types (the WASM needs its own type to
 /// be compiled while it downloads).
 const files = [_]struct { path: []const u8, name: []const u8, mime: []const u8 }{
-    .{ .path = "/", .name = "index.html", .mime = "text/html; charset=utf-8" },
-    .{ .path = "/index.html", .name = "index.html", .mime = "text/html; charset=utf-8" },
-    .{ .path = "/loader.js", .name = "loader.js", .mime = "text/javascript; charset=utf-8" },
-    .{ .path = "/termgate.js", .name = "termgate.js", .mime = "text/javascript; charset=utf-8" },
-    .{ .path = "/termgate.wasm", .name = "termgate.wasm", .mime = "application/wasm" },
+    // The single-page app's page; its other files are under /spa/
+    .{ .path = "/", .name = "spa/index.html", .mime = "text/html; charset=utf-8" },
+    .{ .path = "/index.html", .name = "spa/index.html", .mime = "text/html; charset=utf-8" },
     // Installing the panel as an app (PWA)
     .{ .path = "/manifest.webmanifest", .name = "manifest.webmanifest", .mime = "application/manifest+json" },
     .{ .path = "/icon-192.png", .name = "icon-192.png", .mime = "image/png" },
@@ -170,7 +168,7 @@ fn api(state: *State, req: *std.http.Server.Request, name: []const u8) !void {
     while (it.next()) |h| {
         if (std.ascii.eqlIgnoreCase(h.name, "x-termgate")) {
             panel_path = std.mem.eql(u8, h.value, "spa");
-            marked = panel_path or std.mem.eql(u8, h.value, "1");
+            marked = panel_path;
         }
         if (std.ascii.eqlIgnoreCase(h.name, "x-forwarded-proto")) plain_http = std.ascii.eqlIgnoreCase(h.value, "http");
         if (std.ascii.eqlIgnoreCase(h.name, "cookie")) token = try cookie(a, h.value);

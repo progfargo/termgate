@@ -4,7 +4,7 @@ termgate gives invited people and AI bots terminal access to gateways that canno
 
 termgate is a web application the customer runs on a server: the online authority that approves every session, counts uses, logs sessions and records audit and node status, and the panel where admins and auditors work, each as their own user, from any browser. When termgate is not running, no session can be opened and open ones are ended. The relay keeps no state.
 
-> **Direction change (2026-11-10).** termgate was first built as a desktop app (LVGL + SDL3) that was also the authority. That was a mistake: several admins and an auditor could not work at the same time, and logging, time limits and approvals only worked while one person's computer was on. termgate becomes a server program with a web panel. The panel was first the same Zig + LVGL UI drawn on a canvas in the browser (LVGL, later with SDL3 and Emscripten); a canvas kept missing what a browser gives a page for free (focus, zoom, text selection, a phone's keyboard, password managers). Since 2026-11-11 the panel is built like our earlier project: a JSON API on the server and a single-page app written in Zig, compiled to WASM, that builds the page in HTML. What stays: lib/core, tgnode, tgterm and termgate's deciding modules (auth callout, registration, invitations, approvals, database, recorder, end-to-end encryption). What went: the desktop platform layer (SDL3) and the first-start screen (now `termgate init`). The desktop app is gone from the code; its screens are the panel's screens.
+> **Direction change (2026-11-10).** termgate was first built as a desktop app (LVGL + SDL3) that was also the authority. That was a mistake: several admins and an auditor could not work at the same time, and logging, time limits and approvals only worked while one person's computer was on. termgate becomes a server program with a web panel. The panel was first the same Zig + LVGL UI drawn on a canvas in the browser (LVGL, later with SDL3 and Emscripten); a canvas kept missing what a browser gives a page for free (focus, zoom, text selection, a phone's keyboard, password managers). Since 2026-11-11 the panel is built like our earlier project: a JSON API on the server and a single-page app written in Zig, compiled to WASM, that builds the page in HTML. What stays: lib/core, tgnode, tgterm and termgate's deciding modules (auth callout, registration, invitations, approvals, database, recorder, end-to-end encryption). What went: the desktop app, the LVGL screens and the first-start screen (now `termgate init`).
 
 ## Features
 
@@ -284,7 +284,7 @@ termgate builds on farlogin, a prototype designed and developed by progfargo. Th
 - **Positioning.** A last-resort console for IoT fleets, and the screen-access vision (Farscreen).
 
 The main decisions in this work were also made by progfargo:
-- A web panel drawn by the Zig + LVGL UI as WASM, on a server (after a first version as a desktop app).
+- A web panel on a server, built like our earlier project: a JSON API and a single-page app in Zig (after a desktop app and a canvas panel drawn by LVGL).
 - A separate relay per customer, run by the customer.
 - One program for the authority, the panel and the relay.
 - Time-limited and N-use invitations.

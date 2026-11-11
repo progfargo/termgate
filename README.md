@@ -144,4 +144,4 @@ Built with [Claude Code](https://claude.com/claude-code). I defined the features
 
 ## License
 
-MIT (see `LICENSE`). Bundled: Font Awesome Free (`termgate/web/asset/fontawesome/LICENSE.txt`), the Ubuntu font (Ubuntu Font Licence), zig-js (`termgate/vendor/zig-js/LICENSE`) and nayuki's QR Code generator (MIT, in its source).
+Copyright (c) 2026 [ionova.net](https://ionova.net). MIT (see `LICENSE`). Bundled: Font Awesome Free (`termgate/web/asset/fontawesome/LICENSE.txt`), the Ubuntu font (Ubuntu Font Licence), zig-js (`termgate/vendor/zig-js/LICENSE`) and nayuki's QR Code generator (MIT, in its source).

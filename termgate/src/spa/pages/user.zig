@@ -96,7 +96,7 @@ fn toolbar(b: *app.Buf, u: User, size: []const u8, tab: Tab) void {
         .{ .tab = .info, .path = "#/user/display", .label = "Info", .title = "The user's record.", .show = true },
         .{ .tab = .edit, .path = "#/user/update", .label = "Edit", .title = "Edit record.", .show = !u.superuser and state.can("user", "update") },
         .{ .tab = .roles, .path = "#/user/role", .label = "Roles", .title = "Edit user roles.", .show = !u.superuser and state.can("user", "role_browse") },
-        .{ .tab = .new_pass, .path = "#/user/update_pass", .label = "New Pass", .title = "Give the user a new password.", .show = !u.superuser and state.can("user", "update_pass") },
+        .{ .tab = .new_pass, .path = "#/user/update_pass", .label = "New Pass", .title = "Give the user a new password.", .show = tab != .none and !u.superuser and state.can("user", "update_pass") },
         // Only on the user's own pages, not in the list
         .{ .tab = .terminal, .path = "#/user/terminal", .label = "Access Key", .title = "A terminal access key: the user signs in to tgterm with it once.", .show = tab != .none and state.can("user", "access") },
         .{ .tab = .delete, .path = "#/user/delete", .label = "Delete", .title = "Delete record.", .show = !u.superuser and !own and state.can("user", "delete"), .class = "error" },

@@ -126,8 +126,42 @@
     if (!btn) return;
     e.preventDefault();
     if (btn.dataset.action === "toggleSidebar") { menu.classList.toggle("left-menu-show"); return; }
+    if (btn.dataset.wait) { waitFor(btn); return; }
     call(x.tg_action, btn.dataset.action, JSON.stringify(formData(btn)));
   });
+
+  // A button whose call takes a while (data-wait: signing in): its form
+  // is disabled and the button gets a spinning wheel, drawn before the
+  // call starts (the call holds the page; the wheel turns on regardless)
+  let waiting = false;
+  function waitFor(btn) {
+    if (waiting) return;
+    waiting = true;
+    const data = JSON.stringify(formData(btn));
+    const form = btn.closest("form") || btn;
+    const fields = [...form.querySelectorAll("input, select, textarea, button")];
+    for (const f of fields) f.disabled = true;
+    const label = btn.innerHTML;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> ' + label;
+    // After the next frame is drawn; a page that draws no frames (a
+    // headless browser) goes on after 50 ms
+    let started = false;
+    const go = () => {
+      if (started) return;
+      started = true;
+      try { call(x.tg_action, btn.dataset.action, data); }
+      finally {
+        waiting = false;
+        // Still on the page: usable again
+        if (btn.isConnected) {
+          btn.innerHTML = label;
+          for (const f of fields) f.disabled = false;
+        }
+      }
+    };
+    requestAnimationFrame(() => setTimeout(go, 0));
+    setTimeout(go, 50);
+  }
 
   // A list's filter changed (data-change on a select): its action, with
   // the fields of its form

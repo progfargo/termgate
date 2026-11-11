@@ -88,7 +88,7 @@ The admin gives each node a name when enrolling it. Names are unique per custome
 4. The admin sees it in termgate (first contact, the node's hardware public key, its properties) and compares it with `tgnode id` on the device if needed, then approves. The hardware key is now bound to the node name.
 5. tgnode repeats the request every 5 s. Once approved, termgate answers with the node name and its issuer key; tgnode writes its configuration (name, relay address, CA, issuer key) to `node.json` in the folder it was started in, and starts serving. From then on `tgnode run` needs no parameter and the callout recognizes the node by its hardware key.
 
-If termgate is not running, registration waits: tgnode retries every 5 s until the node key expires.
+If the relay or termgate cannot be reached, registration waits: tgnode tries again every 5 s for as long as it takes, so nobody has to start it again. Only termgate refusing the node key (unknown, used or expired) or a CA that does not match the key ends it. Since an unreachable termgate also makes the relay refuse connections (nobody answers its auth callout), tgnode first asks for the CA, which termgate answers; a refusal right after that is the key's.
 
 **Invitation**
 

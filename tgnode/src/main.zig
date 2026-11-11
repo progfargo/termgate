@@ -81,7 +81,6 @@ pub fn main(init: std.process.Init) !void {
                 error.InvalidCode => "this is not a node key",
                 error.WrongCa => "the relay's certificate does not match the node key",
                 error.Refused => "termgate refused it (unknown, used or expired node key)",
-                error.GaveUp => "not approved in time",
                 else => @errorName(e),
             }});
             std.process.exit(1);

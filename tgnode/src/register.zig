@@ -22,39 +22,49 @@ const log = std.log.scoped(.tgnode);
 pub const Options = struct {
     /// Time between registration requests while waiting for the admin
     poll: Io.Duration = .fromSeconds(5),
-    /// Give up after this long (the node key expires after an hour anyway)
-    give_up_after: Io.Duration = .fromSeconds(3600),
 };
 
 pub const Error = error{
     /// termgate refused the registration (unknown, expired or used node key)
     Refused,
-    GaveUp,
 };
 
 /// Registers this node. Connections use `gpa` (each holds large buffers and
-/// attempts may repeat for hours); strings of the returned config live in
+/// attempts may repeat for long); strings of the returned config live in
 /// `arena`.
 pub fn register(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, code_text: []const u8, key: core.nkeys.KeyPair, root: Io.Dir, opts: Options) !Config {
     const code = try core.code.parse(code_text);
     const kpub = key.publicKey().encode();
     const inbox = try std.fmt.allocPrint(arena, "_INBOX.{s}", .{kpub});
 
-    // Step 2: fetch and check the CA
-    const ca_pem = try core.bootstrap.fetchCa(gpa, arena, io, code, key, inbox, "tgnode");
-
-    // Step 3: register over a verified connection
     const token_id = core.code.tokenId(code.token);
     const subject = try std.fmt.allocPrint(arena, "register.{s}", .{&token_id});
-    const deadline = Io.Clock.Timestamp.fromNow(io, .{ .raw = opts.give_up_after, .clock = .awake });
+    // Until approved, or refused: while the relay or termgate cannot be
+    // reached the node keeps trying (nobody has to start it again); only
+    // termgate refusing the key (unknown, used or expired) ends it
     var told_waiting = false;
     while (true) {
+        // Each round's CA in its own memory: rounds may repeat for long
+        var round: std.heap.ArenaAllocator = .init(gpa);
+        defer round.deinit();
+        // Step 2: fetch and check the CA. termgate answers it, so getting
+        // it also tells that termgate is there: a connection refused right
+        // after is the key refused, not termgate gone. A wrong CA ends it
+        // (another relay, or someone in between).
+        const ca_pem = core.bootstrap.fetchCa(gpa, round.allocator(), io, code, key, inbox, "tgnode") catch |e| switch (e) {
+            error.WrongCa, error.OutOfMemory, error.Canceled => return e,
+            else => {
+                log.warn("relay or termgate not reachable ({s}); will retry", .{@errorName(e)});
+                try io.sleep(opts.poll, .awake);
+                continue;
+            },
+        };
+        // Step 3: register over a verified connection
         if (try attempt(gpa, arena, io, code, key, inbox, ca_pem, subject, root)) |cfg| return cfg;
         if (!told_waiting) {
             log.info("registration sent; waiting for the admin to approve it in termgate", .{});
             told_waiting = true;
         }
-        if (deadline.durationFromNow(io).raw.nanoseconds <= 0) return error.GaveUp;
         try io.sleep(opts.poll, .awake);
     }
 }
@@ -118,7 +128,7 @@ fn attempt(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, code: core.
         .name = try arena.dupe(u8, name),
         .relay_host = try arena.dupe(u8, code.host),
         .relay_port = code.port,
-        .ca_pem = ca_pem,
+        .ca_pem = try arena.dupe(u8, ca_pem),
         .issuer = try arena.dupe(u8, issuer),
     };
 }

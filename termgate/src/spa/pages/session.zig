@@ -74,6 +74,13 @@ pub fn browse(_: []const u8) void {
 
 pub fn end(f: Form) void {
     _ = fetch.post("session/end", .{ f.str("node"), f.str("key"), f.str("sid") }) orelse return;
+    // On the watch page: the page stays, with the session's last screen;
+    // the watch shows the end when the node reports it
+    if (std.mem.startsWith(u8, dom.hash(), "/session/watch")) {
+        if (!fetch.refused()) state.say("success", "The session has been ended.");
+        _ = state.renderMessages();
+        return;
+    }
     if (fetch.refused()) state.keepMessages() else state.say("success", "The session has been ended.");
     router.go(dom.hash());
 }

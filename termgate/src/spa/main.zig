@@ -22,6 +22,7 @@ const session = @import("pages/session.zig");
 const audit = @import("pages/audit.zig");
 const config = @import("pages/config.zig");
 const help = @import("pages/help.zig");
+const watch = @import("pages/watch.zig");
 
 const routes = [_]router.Route{
     .{ .path = "/login", .handler = login.render, .public = true },
@@ -43,6 +44,7 @@ const routes = [_]router.Route{
     .{ .path = "/node/delete", .handler = node.delete },
     .{ .path = "/session", .handler = session.browse },
     .{ .path = "/session/log", .handler = session.log },
+    .{ .path = "/session/watch", .handler = watch.render },
     .{ .path = "/audit", .handler = audit.browse },
     .{ .path = "/config", .handler = config.browse },
     .{ .path = "/help", .handler = help.render },
@@ -133,7 +135,16 @@ export fn tg_start() void {
 /// The hash changed (a link, the browser's back button).
 export fn tg_route(ptr: [*]const u8, len: usize) void {
     app.beginEvent();
+    // Leaving a watched session stops watching it
+    if (watch.watching() and !std.mem.startsWith(u8, ptr[0..len], "/session/watch")) watch.stop();
     router.navigate(ptr[0..len]);
+}
+
+/// Four times a second: a watched session's new output.
+export fn tg_tick() void {
+    if (!watch.watching()) return;
+    app.beginEvent();
+    watch.tick();
 }
 
 /// An element with data-action was clicked; `form` is the JSON of its

@@ -142,4 +142,6 @@
   });
 
   x.tg_start();
+  // A watched session is fetched four times a second
+  setInterval(() => x.tg_tick(), 250);
 })();

@@ -152,6 +152,8 @@ pub fn build(b: *std.Build) void {
             .optimize = spa_optimize,
             .imports = &.{
                 .{ .name = "zig-js", .module = zig_js },
+                // libghostty-vt: drawing a watched session
+                .{ .name = "vt", .module = b.dependency("core", .{ .target = spa_target, .optimize = spa_optimize }).module("vt") },
                 // The rights a role can give, the same list as the server's
                 .{ .name = "rights", .module = b.createModule(.{ .root_source_file = b.path("src/rights.zig"), .target = spa_target, .optimize = spa_optimize }) },
             },

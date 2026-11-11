@@ -12,6 +12,7 @@ const fetch = @import("../fetch.zig");
 const layout = @import("../layout.zig");
 const router = @import("../router.zig");
 const content = @import("../content.zig");
+const CargoList = @import("../lib/cargo.zig").CargoList;
 const Form = @import("../form.zig").Form;
 
 pub const Node = struct {
@@ -106,14 +107,60 @@ pub fn ago(t: ?i64) []const u8 {
 
 // --- Browse -------------------------------------------------------------------
 
+// The list's state in the address (lib/cargo.zig): search word, page
+var cg: CargoList = .{};
+var cg_ready = false;
+const cg_names = [_][]const u8{ "key", "pn" };
+
+fn cargo() *CargoList {
+    if (!cg_ready) {
+        cg.addStr("key", "");
+        cg.addInt("pn", 1);
+        cg.addInt("nodeId", 0);
+        cg_ready = true;
+    }
+    return &cg;
+}
+
+/// The address of a node's page (#/node/display?nodeId=3).
+fn nodeUrl(path: []const u8, id: i64) []const u8 {
+    const c = cargo();
+    c.setInt("nodeId", id);
+    return c.makeUrl(path, &.{"nodeId"});
+}
+
+/// The node of a page's address.
+fn readNodeId(query: []const u8) i64 {
+    const c = cargo();
+    c.read(query);
+    return c.int("nodeId");
+}
+
+/// The header's Search: the list with the word, from its first page.
+pub fn submitSearch(f: Form) void {
+    const c = cargo();
+    c.setStr("key", f.trimmed("key"));
+    c.setInt("pn", 1);
+    router.go(c.makeUrl("/node", &cg_names));
+}
+
+/// A page number under the list.
+pub fn goPage(f: Form) void {
+    const c = cargo();
+    c.readMap(f);
+    router.go(c.makeUrl("/node", &cg_names));
+}
+
 pub fn browse(query: []const u8) void {
     if (!state.can("node", "browse")) return router.renderBadRequest();
     begin();
-    const key = app.queryValue(query, "key");
-    content.search("/node", key);
+    const c = cargo();
+    c.read(query);
+    const key = c.str("key");
+    content.search("nodeSearch", key);
     // Fresh system info from the online nodes, for the next look
     _ = fetch.postRaw("node/status_all", "[]");
-    const page = nodes(key, @max(1, app.queryInt(query, "pn"))) orelse return;
+    const page = nodes(key, @max(1, c.int("pn"))) orelse return;
     const list = page.rows;
     const sum = if (fetch.postRaw("node/summary", "[]")) |s| fetch.fieldAs(Summary, s, "data") orelse Summary{} else Summary{};
     var b: app.Buf = .{};
@@ -126,7 +173,7 @@ pub fn browse(query: []const u8) void {
     b.raw("<table><thead><tr><th>Name</th><th>State</th><th>Last seen</th><th>System</th><th class=\"right\">Command</th></tr></thead><tbody>");
     if (list.len == 0) b.raw("<tr><td colspan=\"5\">Empty list.</td></tr>");
     for (list) |n| {
-        b.add("<tr><td><a href=\"#/node/display?nodeId={d}\">", .{n.id});
+        b.add("<tr><td><a href=\"{s}\">", .{nodeUrl("#/node/display", n.id)});
         content.find(&b, n.name, key);
         b.raw("</a>");
         if (n.description.len > 0) {
@@ -150,13 +197,13 @@ pub fn browse(query: []const u8) void {
     }
     b.raw("</tbody></table>");
     content.contentEnd(&b);
-    content.ruler(&b, "/node", key, page.page, page.pages);
+    content.ruler(&b, page.pages, page.page, "nodeGoPage");
     content.show(&b);
 }
 
 /// The buttons for a node, by its state and the user's rights.
 fn commands(b: *app.Buf, n: Node, size: []const u8) void {
-    b.add("<a href=\"#/node/display?nodeId={d}\" class=\"button button-default button-{s}\">Info</a>", .{ n.id, size });
+    b.add("<a href=\"{s}\" class=\"button button-default button-{s}\">Info</a>", .{ nodeUrl("#/node/display", n.id), size });
     const is = struct {
         fn f(x: Node, s: []const u8) bool {
             return std.mem.eql(u8, x.state, s);
@@ -172,7 +219,7 @@ fn commands(b: *app.Buf, n: Node, size: []const u8) void {
         const off = is(n, "disabled");
         b.add("<button type=\"button\" data-action=\"nodeSetDisabled\" data-id=\"{d}\" data-off=\"{s}\" data-name=\"{f}\" class=\"button button-{s} button-{s}\">{s}</button>", .{ n.id, if (off) "0" else "1", app.esc(n.name), if (off) "default" else "warning", size, if (off) "Enable" else "Disable" });
     }
-    if (state.can("node", "delete")) b.add("<a href=\"#/node/delete?nodeId={d}\" class=\"button button-error button-{s}\">Delete</a>", .{ n.id, size });
+    if (state.can("node", "delete")) b.add("<a href=\"{s}\" class=\"button button-error button-{s}\">Delete</a>", .{ nodeUrl("#/node/delete", n.id), size });
 }
 
 // --- Insert and the node key ------------------------------------------------------
@@ -265,7 +312,7 @@ fn afterChange(answer: ?std.json.Value, done: []const u8) void {
 pub fn display(query: []const u8) void {
     if (!state.can("node", "browse")) return router.renderBadRequest();
     begin();
-    const id = app.queryInt(query, "nodeId");
+    const id = readNodeId(query);
     const n = nodeById(id) orelse return;
     var b: app.Buf = .{};
     content.header(&b, &.{ .{ "Nodes", "#/node" }, .{ n.name, "" } });
@@ -319,7 +366,7 @@ var delete_id: i64 = 0;
 pub fn delete(query: []const u8) void {
     if (!state.can("node", "delete")) return router.renderBadRequest();
     begin();
-    delete_id = app.queryInt(query, "nodeId");
+    delete_id = readNodeId(query);
     const n = nodeById(delete_id) orelse return;
     var b: app.Buf = .{};
     content.header(&b, &.{ .{ "Nodes", "#/node" }, .{ "Delete Record", "" } });

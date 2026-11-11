@@ -14,6 +14,33 @@ const router = @import("../router.zig");
 const content = @import("../content.zig");
 const login = @import("login.zig");
 const Form = @import("../form.zig").Form;
+const CargoList = @import("../lib/cargo.zig").CargoList;
+
+// The role of a page in the address (lib/cargo.zig)
+var cg: CargoList = .{};
+var cg_ready = false;
+
+fn cargo() *CargoList {
+    if (!cg_ready) {
+        cg.addInt("roleId", 0);
+        cg_ready = true;
+    }
+    return &cg;
+}
+
+/// The address of a role's page (#/role/update?roleId=3).
+fn roleUrl(path: []const u8, id: i64) []const u8 {
+    const c = cargo();
+    c.setInt("roleId", id);
+    return c.makeUrl(path, &.{"roleId"});
+}
+
+/// The role of a page's address.
+fn readRoleId(query: []const u8) i64 {
+    const c = cargo();
+    c.read(query);
+    return c.int("roleId");
+}
 
 const Role = struct { id: i64, name: []const u8, description: []const u8 = "", user_count: i64 = 0 };
 
@@ -70,10 +97,10 @@ pub fn browse(_: []const u8) void {
         if (has_command) {
             b.raw("<td class=\"right\"><div class=\"button-group-fixed\">");
             if (changeable(r)) {
-                if (can_update) b.add("<a href=\"#/role/update?roleId={d}\" class=\"button button-default button-xs\">Edit</a>", .{r.id});
-                if (can_right) b.add("<a href=\"#/role/right?roleId={d}\" class=\"button button-default button-xs\">Role Rights</a>", .{r.id});
+                if (can_update) b.add("<a href=\"{s}\" class=\"button button-default button-xs\">Edit</a>", .{roleUrl("#/role/update", r.id)});
+                if (can_right) b.add("<a href=\"{s}\" class=\"button button-default button-xs\">Role Rights</a>", .{roleUrl("#/role/right", r.id)});
             }
-            if (can_delete and !std.mem.eql(u8, r.name, "admin")) b.add("<a href=\"#/role/delete?roleId={d}\" class=\"button button-error button-xs\">Delete</a>", .{r.id});
+            if (can_delete and !std.mem.eql(u8, r.name, "admin")) b.add("<a href=\"{s}\" class=\"button button-error button-xs\">Delete</a>", .{roleUrl("#/role/delete", r.id)});
             b.raw("</div></td>");
         }
         b.raw("</tr>");
@@ -97,7 +124,7 @@ pub fn insert(_: []const u8) void {
 pub fn update(query: []const u8) void {
     if (!state.can("role", "update")) return router.renderBadRequest();
     begin();
-    edit_id = app.queryInt(query, "roleId");
+    edit_id = readRoleId(query);
     const r = get(edit_id) orelse return;
     renderForm(r.role.name, r.role.description);
 }
@@ -123,7 +150,7 @@ pub fn submitInsert(f: Form) void {
     state.say("success", "Record has been saved.");
     // Its rights next, for who may set them
     const id = fetch.fieldAs(i64, answer, "id") orelse 0;
-    if (state.can("role", "role_right") and id != 0) return router.go(std.fmt.allocPrint(app.arena(), "/role/right?roleId={d}", .{id}) catch "/role");
+    if (state.can("role", "role_right") and id != 0) return router.go(roleUrl("/role/right", id));
     router.go("/role");
 }
 
@@ -142,7 +169,7 @@ pub fn submitUpdate(f: Form) void {
 pub fn right(query: []const u8) void {
     if (!state.can("role", "role_right")) return router.renderBadRequest();
     begin();
-    edit_id = app.queryInt(query, "roleId");
+    edit_id = readRoleId(query);
     const r = get(edit_id) orelse return;
     if (!changeable(r.role)) return router.renderBadRequest();
     var b: app.Buf = .{};
@@ -179,7 +206,7 @@ pub fn submitRight(f: Form) void {
 pub fn delete(query: []const u8) void {
     if (!state.can("role", "delete")) return router.renderBadRequest();
     begin();
-    edit_id = app.queryInt(query, "roleId");
+    edit_id = readRoleId(query);
     const r = get(edit_id) orelse return;
     var b: app.Buf = .{};
     content.header(&b, &.{ .{ "Roles", "#/role" }, .{ "Delete Record", "" } });

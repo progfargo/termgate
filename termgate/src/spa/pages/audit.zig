@@ -10,16 +10,50 @@ const fetch = @import("../fetch.zig");
 const layout = @import("../layout.zig");
 const router = @import("../router.zig");
 const content = @import("../content.zig");
+const Form = @import("../form.zig").Form;
+const CargoList = @import("../lib/cargo.zig").CargoList;
 
 const Action = struct { id: i64, at: i64, user: []const u8 = "", call: []const u8 = "", detail: []const u8 = "", ok: bool = true };
+
+
+// The list's state in the address (lib/cargo.zig): search word, page
+var cg: CargoList = .{};
+var cg_ready = false;
+const cg_names = [_][]const u8{ "key", "pn" };
+
+fn cargo() *CargoList {
+    if (!cg_ready) {
+        cg.addStr("key", "");
+        cg.addInt("pn", 1);
+        cg_ready = true;
+    }
+    return &cg;
+}
+
+/// The header's Search: the list with the word, from its first page.
+pub fn submitSearch(f: Form) void {
+    const c = cargo();
+    c.setStr("key", f.trimmed("key"));
+    c.setInt("pn", 1);
+    router.go(c.makeUrl("/audit", &cg_names));
+}
+
+/// A page number under the list.
+pub fn goPage(f: Form) void {
+    const c = cargo();
+    c.readMap(f);
+    router.go(c.makeUrl("/audit", &cg_names));
+}
 
 pub fn browse(query: []const u8) void {
     if (!state.can("audit", "browse")) return router.renderBadRequest();
     dom.setBodyId("");
     layout.renderDefault("audit");
-    const key = app.queryValue(query, "key");
-    content.search("/audit", key);
-    const answer = fetch.post("audit/browse", .{ key, @max(1, app.queryInt(query, "pn")) }) orelse return;
+    const c = cargo();
+    c.read(query);
+    const key = c.str("key");
+    content.search("auditSearch", key);
+    const answer = fetch.post("audit/browse", .{ key, @max(1, c.int("pn")) }) orelse return;
     const page = fetch.fieldAs(content.Page(Action), answer, "data") orelse content.Page(Action){};
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Audit", "" }});
@@ -41,6 +75,6 @@ pub fn browse(query: []const u8) void {
     }
     b.raw("</tbody></table>");
     content.contentEnd(&b);
-    content.ruler(&b, "/audit", key, page.page, page.pages);
+    content.ruler(&b, page.pages, page.page, "auditGoPage");
     content.show(&b);
 }

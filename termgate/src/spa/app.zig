@@ -67,7 +67,8 @@ pub const Escaped = struct {
 };
 
 /// The query of a hash ("id=3&key=x"): a value by name, "" if not there;
-/// %xx decoded.
+/// %xx decoded. Pages read their address with lib/cargo.zig, which uses
+/// this.
 pub fn queryValue(query: []const u8, name: []const u8) []const u8 {
     var it = std.mem.splitScalar(u8, query, '&');
     while (it.next()) |kv| {
@@ -106,10 +107,6 @@ fn urlDecode(text: []const u8) []const u8 {
     return out.items;
 }
 
-pub fn queryInt(query: []const u8, name: []const u8) i64 {
-    return std.fmt.parseInt(i64, queryValue(query, name), 10) catch 0;
-}
-
 test "addresses" {
     try std.testing.expectEqualStrings("ist%20gw%26x", urlEncode("ist gw&x"));
     try std.testing.expectEqualStrings("ist gw&x", queryValue("pn=2&key=ist%20gw%26x", "key"));
@@ -120,4 +117,8 @@ test "escaping" {
     var b: Buf = .{};
     b.add("<td>{f}</td>", .{esc("<a href=\"x\">&'")});
     try std.testing.expectEqualStrings("<td>&lt;a href=&quot;x&quot;&gt;&amp;&#39;</td>", b.str());
+}
+
+test {
+    _ = @import("lib/cargo.zig");
 }

@@ -16,6 +16,8 @@ const layout = @import("../layout.zig");
 const router = @import("../router.zig");
 const content = @import("../content.zig");
 const login = @import("login.zig");
+const combo = @import("../content/combo.zig");
+const CargoList = @import("../lib/cargo.zig").CargoList;
 const Form = @import("../form.zig").Form;
 
 const RoleRef = struct { id: i64, name: []const u8 };
@@ -74,22 +76,72 @@ fn status(b: *app.Buf, u: User) void {
 
 // --- Browse -------------------------------------------------------------------
 
-/// The list's filters, from its address (key: a search word, rid: a role,
-/// stat: active, new, blocked)
-var filter_role: i64 = 0;
-var filter_status: []const u8 = "default";
+// The list's state in the address (lib/cargo.zig): key, a search word;
+// pn, the page; rid, a role; stat: active, new, blocked
+var cg: CargoList = .{};
+var cg_ready = false;
+const cg_names = [_][]const u8{ "key", "pn", "rid", "stat" };
+
+fn cargo() *CargoList {
+    if (!cg_ready) {
+        cg.addStr("key", "");
+        cg.addInt("pn", 1);
+        cg.addInt("rid", 0);
+        cg.addStr("stat", "default");
+        cg.addInt("userId", 0);
+        cg_ready = true;
+    }
+    return &cg;
+}
+
+/// The address of a user's page (#/user/update?userId=3).
+fn userUrl(path: []const u8, id: i64) []const u8 {
+    const c = cargo();
+    c.setInt("userId", id);
+    return c.makeUrl(path, &.{"userId"});
+}
+
+/// The user of a page's address.
+fn readUserId(query: []const u8) i64 {
+    const c = cargo();
+    c.read(query);
+    return c.int("userId");
+}
+
+/// The header's Search: the list with the word, from its first page.
+pub fn submitSearch(f: Form) void {
+    const c = cargo();
+    c.setStr("key", f.trimmed("key"));
+    c.setInt("pn", 1);
+    router.go(c.makeUrl("/user", &cg_names));
+}
+
+/// A page number under the list.
+pub fn goPage(f: Form) void {
+    const c = cargo();
+    c.readMap(f);
+    router.go(c.makeUrl("/user", &cg_names));
+}
+
+/// A filter was changed: the list from its first page.
+pub fn filter(f: Form) void {
+    const c = cargo();
+    if (f.str("user-rid-select").len > 0) c.setInt("rid", f.int("user-rid-select"));
+    if (f.str("user-stat-select").len > 0) c.setStr("stat", f.str("user-stat-select"));
+    c.setInt("pn", 1);
+    router.go(c.makeUrl("/user", &cg_names));
+}
 
 pub fn browse(query: []const u8) void {
     if (!state.can("user", "browse")) return router.renderBadRequest();
     begin();
-    const key = app.queryValue(query, "key");
-    filter_role = app.queryInt(query, "rid");
-    filter_status = app.queryValue(query, "stat");
-    if (filter_status.len == 0) filter_status = "default";
-    // The search and the page numbers keep the filters
-    const path = std.fmt.allocPrint(app.arena(), "/user?rid={d}&stat={s}", .{ filter_role, app.urlEncode(filter_status) }) catch "/user";
-    content.search(path, key);
-    const page = users(key, filter_role, if (std.mem.eql(u8, filter_status, "default")) "" else filter_status, @max(1, app.queryInt(query, "pn"))) orelse return;
+    const c = cargo();
+    c.read(query);
+    const key = c.str("key");
+    const filter_role = c.int("rid");
+    const filter_status = c.str("stat");
+    content.search("userSearch", key);
+    const page = users(key, filter_role, if (std.mem.eql(u8, filter_status, "default")) "" else filter_status, @max(1, c.int("pn"))) orelse return;
     const list = page.users;
     const all_roles = if (state.can("user", "role_browse")) roles() else &.{};
     const me = state.user.?;
@@ -102,14 +154,16 @@ pub fn browse(query: []const u8) void {
     if (state.can("user", "insert")) b.raw("<a href=\"#/user/insert\" class=\"button button-default button-sm\">New</a>");
     // Each filter in a form of its own, as in our earlier project
     if (all_roles.len > 0) {
-        b.add("<form class=\"form-inline\"><div class=\"form-group\"><select id=\"user-rid-select\" class=\"form-control\" data-change=\"userFilter\"><option value=\"0\"{s}>All roles</option>", .{if (filter_role == 0) " selected" else ""});
-        for (all_roles) |r| b.add("<option value=\"{d}\"{s}>{f}</option>", .{ r.id, if (r.id == filter_role) " selected" else "", app.esc(r.name) });
-        b.raw("</select></div></form>");
+        var role_combo = combo.Combo.init("All roles");
+        for (all_roles) |r| role_combo.add(r.id, r.name);
+        b.add("<form class=\"form-inline\"><div class=\"form-group\"><select id=\"user-rid-select\" class=\"form-control\" data-change=\"userFilter\">{s}</select></div></form>", .{role_combo.format(filter_role)});
     }
-    b.raw("<form class=\"form-inline\"><div class=\"form-group\"><select id=\"user-stat-select\" class=\"form-control\" data-change=\"userFilter\">");
-    for ([_][2][]const u8{ .{ "default", "All statuses" }, .{ "active", "Active" }, .{ "new", "Not signed in yet" }, .{ "blocked", "Blocked" } }) |o|
-        b.add("<option value=\"{s}\"{s}>{s}</option>", .{ o[0], if (std.mem.eql(u8, o[0], filter_status)) " selected" else "", o[1] });
-    b.raw("</select></div></form>");
+    var stat_combo: combo.EnumCombo = .{};
+    stat_combo.add("default", "All statuses");
+    stat_combo.add("active", "Active");
+    stat_combo.add("new", "Not signed in yet");
+    stat_combo.add("blocked", "Blocked");
+    b.add("<form class=\"form-inline\"><div class=\"form-group\"><select id=\"user-stat-select\" class=\"form-control\" data-change=\"userFilter\">{s}</select></div></form>", .{stat_combo.format(filter_status)});
     b.raw("<a href=\"#/user\" class=\"button button-default button-sm\" title=\"Reset all filters.\">Clear</a>");
     content.commandEnd(&b);
 
@@ -139,13 +193,13 @@ pub fn browse(query: []const u8) void {
                 b.add("<button type=\"button\" data-action=\"userSelect\" data-id=\"{d}\" class=\"button button-default button-xs\" title=\"See and use the panel as this user does.\">Select</button>", .{u.id});
             // Nobody changes the superuser
             if (!u.superuser) {
-                if (state.can("user", "update")) b.add("<a href=\"#/user/update?userId={d}\" class=\"button button-default button-xs\" title=\"Edit record.\">Edit</a>", .{u.id});
-                if (state.can("user", "role_browse")) b.add("<a href=\"#/user/role?userId={d}\" class=\"button button-default button-xs\" title=\"Edit user roles.\">Roles</a>", .{u.id});
-                if (state.can("user", "update_pass")) b.add("<a href=\"#/user/update_pass?userId={d}\" class=\"button button-default button-xs\" title=\"Give the user a new password.\">New Pass</a>", .{u.id});
+                if (state.can("user", "update")) b.add("<a href=\"{s}\" class=\"button button-default button-xs\" title=\"Edit record.\">Edit</a>", .{userUrl("#/user/update", u.id)});
+                if (state.can("user", "role_browse")) b.add("<a href=\"{s}\" class=\"button button-default button-xs\" title=\"Edit user roles.\">Roles</a>", .{userUrl("#/user/role", u.id)});
+                if (state.can("user", "update_pass")) b.add("<a href=\"{s}\" class=\"button button-default button-xs\" title=\"Give the user a new password.\">New Pass</a>", .{userUrl("#/user/update_pass", u.id)});
             }
-            if (state.can("user", "access")) b.add("<a href=\"#/user/terminal?userId={d}\" class=\"button button-default button-xs\" title=\"Terminal access with tgterm.\">Terminal</a>", .{u.id});
+            if (state.can("user", "access")) b.add("<a href=\"{s}\" class=\"button button-default button-xs\" title=\"Terminal access with tgterm.\">Terminal</a>", .{userUrl("#/user/terminal", u.id)});
             if (!u.superuser) {
-                if (state.can("user", "delete") and !own) b.add("<a href=\"#/user/delete?userId={d}\" class=\"button button-error button-xs\" title=\"Delete record.\">Delete</a>", .{u.id});
+                if (state.can("user", "delete") and !own) b.add("<a href=\"{s}\" class=\"button button-error button-xs\" title=\"Delete record.\">Delete</a>", .{userUrl("#/user/delete", u.id)});
             }
             b.raw("</div></td>");
         }
@@ -154,16 +208,8 @@ pub fn browse(query: []const u8) void {
     if (shown == 0) b.add("<tr><td colspan=\"{d}\">Empty list.</td></tr>", .{@as(u8, if (has_command) 5 else 4)});
     b.raw("</tbody></table>");
     content.contentEnd(&b);
-    content.ruler(&b, path, key, page.page, page.pages);
+    content.ruler(&b, page.pages, page.page, "userGoPage");
     show(&b);
-}
-
-/// A filter was changed
-pub fn filter(f: Form) void {
-    // The filter that changed; the other one stays as it is
-    const rid = if (f.str("user-rid-select").len > 0) f.int("user-rid-select") else filter_role;
-    const stat = if (f.str("user-stat-select").len > 0) f.str("user-stat-select") else filter_status;
-    router.go(std.fmt.allocPrint(app.arena(), "/user?rid={d}&stat={s}&pn=1", .{ rid, app.urlEncode(stat) }) catch return);
 }
 
 // --- Insert -------------------------------------------------------------------
@@ -205,7 +251,7 @@ fn showPassword(name: []const u8, password: []const u8, id: i64) void {
     content.contentEnd(&b);
     content.commandStart(&b);
     b.add("<button type=\"button\" data-action=\"copy\" data-text=\"{f}\" class=\"button button-default button-sm\"><i class=\"fa fa-copy\"></i> Copy</button>", .{app.esc(password)});
-    if (state.can("user", "role_browse")) b.add("<a href=\"#/user/role?userId={d}\" class=\"button button-primary button-sm\">Roles</a>", .{id});
+    if (state.can("user", "role_browse")) b.add("<a href=\"{s}\" class=\"button button-primary button-sm\">Roles</a>", .{userUrl("#/user/role", id)});
     b.raw("<a href=\"#/user\" class=\"button button-default button-sm\">Done</a>");
     content.commandEnd(&b);
     show(&b);
@@ -218,7 +264,7 @@ var edit_id: i64 = 0;
 pub fn update(query: []const u8) void {
     if (!state.can("user", "update")) return router.renderBadRequest();
     begin();
-    edit_id = app.queryInt(query, "userId");
+    edit_id = readUserId(query);
     const u = userById(edit_id) orelse return;
     renderUpdate(u.name, u.disabled, std.mem.eql(u8, u.name, state.user.?.name));
 }
@@ -253,7 +299,7 @@ pub fn submitUpdate(f: Form) void {
 pub fn role(query: []const u8) void {
     if (!state.can("user", "role_browse")) return router.renderBadRequest();
     begin();
-    edit_id = app.queryInt(query, "userId");
+    edit_id = readUserId(query);
     renderRoles();
 }
 
@@ -323,7 +369,7 @@ fn afterRoles(done: []const u8) void {
 pub fn updatePass(query: []const u8) void {
     if (!state.can("user", "update_pass")) return router.renderBadRequest();
     begin();
-    edit_id = app.queryInt(query, "userId");
+    edit_id = readUserId(query);
     const u = userById(edit_id) orelse return;
     var b: app.Buf = .{};
     content.header(&b, &.{ .{ "Users", "#/user" }, .{ u.name, "" }, .{ "New Password", "" } });
@@ -350,7 +396,7 @@ pub fn submitUpdatePass(_: Form) void {
 pub fn delete(query: []const u8) void {
     if (!state.can("user", "delete")) return router.renderBadRequest();
     begin();
-    edit_id = app.queryInt(query, "userId");
+    edit_id = readUserId(query);
     const u = userById(edit_id) orelse return;
     var b: app.Buf = .{};
     content.header(&b, &.{ .{ "Users", "#/user" }, .{ "Delete Record", "" } });
@@ -413,7 +459,7 @@ fn terminalLabel(b: *app.Buf, t: ?Terminal) void {
 pub fn terminal(query: []const u8) void {
     if (!state.can("user", "access")) return router.renderBadRequest();
     begin();
-    edit_id = app.queryInt(query, "userId");
+    edit_id = readUserId(query);
     renderTerminal(.{});
 }
 
@@ -496,7 +542,7 @@ pub fn submitTerminalInvite(f: Form) void {
     content.contentEnd(&b);
     content.commandStart(&b);
     b.add("<button type=\"button\" data-action=\"copy\" data-text=\"{f}\" class=\"button button-default button-sm\"><i class=\"fa fa-copy\"></i> Copy</button>", .{app.esc(command)});
-    b.add("<a href=\"#/user/terminal?userId={d}\" class=\"button button-default button-sm\">Done</a>", .{edit_id});
+    b.add("<a href=\"{s}\" class=\"button button-default button-sm\">Done</a>", .{userUrl("#/user/terminal", edit_id)});
     content.commandEnd(&b);
     content.show(&b);
 }

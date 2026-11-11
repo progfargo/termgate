@@ -14,6 +14,7 @@ const fetch = @import("../fetch.zig");
 const layout = @import("../layout.zig");
 const router = @import("../router.zig");
 const content = @import("../content.zig");
+const CargoList = @import("../lib/cargo.zig").CargoList;
 
 const Watch = struct {
     /// The server's tap
@@ -28,14 +29,31 @@ const Watch = struct {
 
 var watch: ?*Watch = null;
 
+// The watched session in the address (lib/cargo.zig; built by
+// session.zig): its id, node and user's key
+var cg: CargoList = .{};
+var cg_ready = false;
+
+fn cargo() *CargoList {
+    if (!cg_ready) {
+        cg.addStr("sid", "");
+        cg.addStr("node", "");
+        cg.addStr("userKey", "");
+        cg_ready = true;
+    }
+    return &cg;
+}
+
 pub fn render(query: []const u8) void {
     if (!state.can("session", "watch")) return router.renderBadRequest();
     stop();
     dom.setBodyId("");
     layout.renderDefault("session");
-    const sid = app.queryValue(query, "sid");
-    const node = app.queryValue(query, "node");
-    const key = app.queryValue(query, "key");
+    const c = cargo();
+    c.read(query);
+    const sid = c.str("sid");
+    const node = c.str("node");
+    const key = c.str("userKey");
     var b: app.Buf = .{};
     content.header(&b, &.{ .{ "Sessions", "#/session" }, .{ node, "" }, .{ "Watch", "" } });
     content.commandStart(&b);

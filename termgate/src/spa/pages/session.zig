@@ -11,6 +11,7 @@ const fetch = @import("../fetch.zig");
 const layout = @import("../layout.zig");
 const router = @import("../router.zig");
 const content = @import("../content.zig");
+const CargoList = @import("../lib/cargo.zig").CargoList;
 const node_page = @import("node.zig");
 const Form = @import("../form.zig").Form;
 
@@ -52,21 +53,67 @@ pub fn tableFind(b: *app.Buf, sessions: []const Session, open: bool, key: []cons
             b.raw("</td>");
         }
         b.raw("<td class=\"right\"><div class=\"button-group-fixed\">");
-        if (open and can_watch) b.add("<a href=\"#/session/watch?sid={s}&node={f}&key={f}\" class=\"button button-primary button-xs\">Watch</a>", .{ s.sid, app.esc(s.node), app.esc(s.user_key) });
-        if (can_log) b.add("<a href=\"#/session/log?sid={s}\" class=\"button button-default button-xs\">Log</a>", .{s.sid});
+        if (open and can_watch) b.add("<a href=\"{f}\" class=\"button button-primary button-xs\">Watch</a>", .{app.esc(sessionUrl("#/session/watch", s, true))});
+        if (can_log) b.add("<a href=\"{f}\" class=\"button button-default button-xs\">Log</a>", .{app.esc(sessionUrl("#/session/log", s, false))});
         if (open and can_end) b.add("<button type=\"button\" data-action=\"sessionEnd\" data-sid=\"{s}\" data-node=\"{f}\" data-key=\"{f}\" class=\"button button-error button-xs\">End</button>", .{ s.sid, app.esc(s.node), app.esc(s.user_key) });
         b.raw("</div></td></tr>");
     }
     b.raw("</tbody></table>");
 }
 
+
+// The list's state in the address (lib/cargo.zig): search word, page
+var cg: CargoList = .{};
+var cg_ready = false;
+const cg_names = [_][]const u8{ "key", "pn" };
+
+fn cargo() *CargoList {
+    if (!cg_ready) {
+        cg.addStr("key", "");
+        cg.addInt("pn", 1);
+        cg.addStr("sid", "");
+        cg.addStr("node", "");
+        cg.addStr("userKey", "");
+        cg_ready = true;
+    }
+    return &cg;
+}
+
+/// The address of a session's page: its log, or watching it (with its
+/// node and its user's key).
+fn sessionUrl(path: []const u8, s: Session, watch: bool) []const u8 {
+    const c = cargo();
+    c.setStr("sid", s.sid);
+    if (!watch) return c.makeUrl(path, &.{"sid"});
+    c.setStr("node", s.node);
+    c.setStr("userKey", s.user_key);
+    return c.makeUrl(path, &.{ "sid", "node", "userKey" });
+}
+
+/// The header's Search: the list with the word, from its first page.
+pub fn submitSearch(f: Form) void {
+    const c = cargo();
+    c.setStr("key", f.trimmed("key"));
+    c.setInt("pn", 1);
+    router.go(c.makeUrl("/session", &cg_names));
+}
+
+/// A page number under the list.
+pub fn goPage(f: Form) void {
+    const c = cargo();
+    c.readMap(f);
+    router.go(c.makeUrl("/session", &cg_names));
+}
+
 pub fn browse(query: []const u8) void {
     if (!state.can("session", "browse")) return router.renderBadRequest();
     begin("session");
-    const key = app.queryValue(query, "key");
-    content.search("/session", key);
+    const c = cargo();
+    c.read(query);
+    const key = c.str("key");
+    content.search("sessionSearch", key);
     const open = list("session/browse", "[]");
-    const recent = if (fetch.post("session/recent", .{ key, @max(1, app.queryInt(query, "pn")) })) |ans| fetch.fieldAs(content.Page(Session), ans, "data") orelse content.Page(Session){} else content.Page(Session){};
+    const recent = if (fetch.post("session/recent", .{ key, @max(1, c.int("pn")) })) |ans| fetch.fieldAs(content.Page(Session), ans, "data") orelse content.Page(Session){} else content.Page(Session){};
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Sessions", "" }});
     content.commandStart(&b);
@@ -79,7 +126,7 @@ pub fn browse(query: []const u8) void {
     content.contentStart(&b);
     tableFind(&b, recent.rows, false, key);
     content.contentEnd(&b);
-    content.ruler(&b, "/session", key, recent.page, recent.pages);
+    content.ruler(&b, recent.pages, recent.page, "sessionGoPage");
     content.show(&b);
 }
 
@@ -110,7 +157,9 @@ fn unbase64(text: []const u8) []const u8 {
 pub fn log(query: []const u8) void {
     if (!state.can("session", "log")) return router.renderBadRequest();
     begin("session");
-    const sid = app.queryValue(query, "sid");
+    const cg_ = cargo();
+    cg_.read(query);
+    const sid = cg_.str("sid");
     const answer = fetch.post("session/log", .{sid}) orelse return;
     const cmds = fetch.fieldAs([]const Command, answer, "data") orelse &.{};
     var b: app.Buf = .{};

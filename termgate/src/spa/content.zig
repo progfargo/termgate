@@ -20,46 +20,21 @@ pub fn Page(comptime T: type) type {
 }
 
 /// The search box in the header (our earlier project's content.Search): its word is
-/// `key`; the button searches the list at `path` (#/node...). Pages
-/// without a search leave it empty (layout.renderDefault clears it).
-pub fn search(path: []const u8, key: []const u8) void {
+/// `key`; the button is `action`. Pages without a search leave it empty
+/// (layout.renderDefault clears it).
+pub fn search(action: []const u8, key: []const u8) void {
     var b: app.Buf = .{};
     b.add("<form class=\"form-inline form-search\"><input type=\"text\" id=\"key\" placeholder=\"search word...\" value=\"{f}\">", .{app.esc(key)});
-    b.add("<button type=\"button\" data-action=\"search\" data-path=\"{f}\" class=\"button button-primary button-sm\">Search</button></form>", .{app.esc(path)});
+    b.add("<button type=\"button\" data-action=\"{s}\" class=\"button button-primary button-sm\">Search</button></form>", .{action});
     dom.setHtml("search", b.str());
 }
 
-/// The page numbers under a list (our earlier project's ruler): First, <<, a few
-/// numbers around the current one, >>, Last. Each goes to `path` with the
-/// search word and its page number.
-pub fn ruler(b: *app.Buf, path: []const u8, key: []const u8, page: i64, pages: i64) void {
-    if (pages < 2) return;
-    const around = 3;
-    var start: i64 = @max(1, page - around);
-    var end = start + around * 2;
-    if (end > pages) {
-        start = @max(1, start - (end - pages));
-        end = pages;
-    }
-    b.raw("<div class=\"row row-command\"><div class=\"col\"><div class=\"pagination\"><ul class=\"clear\">");
-    const item = struct {
-        fn add(buf: *app.Buf, p: []const u8, k: []const u8, pn: i64, text: []const u8, active: bool) void {
-            // `p` may have a query of its own (a list's filters)
-            const sep: []const u8 = if (std.mem.indexOfScalar(u8, p, '?') != null) "&" else "?";
-            buf.add("<li{s}><a href=\"#{s}{s}key={s}&pn={d}\">{s}</a></li>", .{ if (active) " class=\"active\"" else "", p, sep, app.urlEncode(k), pn, text });
-        }
-    }.add;
-    if (start > 1) {
-        item(b, path, key, 1, "First", false);
-        item(b, path, key, @max(1, page - around), "&lt;&lt;", false);
-    }
-    var i = start;
-    while (i <= end) : (i += 1) item(b, path, key, i, std.fmt.allocPrint(app.arena(), "{d}", .{i}) catch "", i == page);
-    if (end < pages) {
-        item(b, path, key, @min(pages, page + around), "&gt;&gt;", false);
-        item(b, path, key, pages, "Last", false);
-    }
-    b.raw("</ul></div></div></div>");
+/// The page numbers under a list, in their row (content/ruler.zig).
+pub fn ruler(b: *app.Buf, total_pages: i64, page_no: i64, action: []const u8) void {
+    if (total_pages < 2) return;
+    b.raw("<div class=\"row row-command\"><div class=\"col\">");
+    @import("content/ruler.zig").render(b, total_pages, page_no, action);
+    b.raw("</div></div>");
 }
 
 /// `text` with the search word marked (our earlier project's content.Find).
@@ -73,15 +48,16 @@ pub fn find(b: *app.Buf, text: []const u8, key: []const u8) void {
     b.add("{f}", .{app.esc(rest)});
 }
 
-/// The page title: its parts joined by an arrow, the earlier ones links
-/// (our earlier project's page_title). Each part: (text, link or "").
+/// The page title in its row (content/page_title.zig): its parts joined
+/// by an arrow, the earlier ones links. Each part: (text, link or "").
 pub fn header(b: *app.Buf, parts: []const [2][]const u8) void {
-    b.raw("<div class=\"row row-header\"><div class=\"col\"><div class=\"page-title primary\"><h3>");
-    for (parts, 0..) |p, i| {
-        if (i > 0) b.raw(" <i class=\"fa fa-fw fa-angle-right\"></i> ");
-        if (p[1].len > 0) b.add("<a href=\"{s}\">{f}</a>", .{ p[1], app.esc(p[0]) }) else b.add("{f}", .{app.esc(p[0])});
+    var pt: @import("content/page_title.zig").PageTitle = .{};
+    for (parts) |p| {
+        if (p[1].len > 0) _ = pt.add("<a href=\"{s}\">{f}</a>", .{ p[1], app.esc(p[0]) }) else _ = pt.add("{f}", .{app.esc(p[0])});
     }
-    b.raw("</h3></div></div></div>");
+    b.raw("<div class=\"row row-header\"><div class=\"col\">");
+    pt.render(b);
+    b.raw("</div></div>");
 }
 
 /// The row of buttons above or below a page's content.

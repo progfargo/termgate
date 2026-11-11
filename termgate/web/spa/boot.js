@@ -10,6 +10,7 @@
   const zjs = new ZigJS();
   let x = null;
   let answer = new Uint8Array(0);
+  let clearTimer = 0;
 
   const env = {
     // POST /api/<path>, JSON. The panel waits for the answer (a
@@ -40,6 +41,17 @@
     focusFirst() {
       const f = document.querySelector("#main-content input[type=text], #main-content input[type=password], #main-content textarea");
       if (f) f.focus({ preventScroll: true });
+    },
+    // The messages marked auto-clear go after 5 seconds (our earlier project's
+    // Msg.Render); an empty message area is emptied
+    autoClear() {
+      clearTimeout(clearTimer);
+      clearTimer = setTimeout(() => {
+        const box = document.getElementById("site-message");
+        if (!box) return;
+        for (const m of box.querySelectorAll(".auto-clear")) m.remove();
+        if (!box.querySelector(".alert")) box.innerHTML = "";
+      }, 5000);
     },
     // Clipboard, for the panel's Copy buttons
     copy(text) {

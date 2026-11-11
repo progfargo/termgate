@@ -5,7 +5,8 @@
 //! in one place; this file gives them our earlier project's paths and answers.
 //!
 //! The answer is the call's JSON object with `messages` added (name, type
-//! error/warning/info/success, lines), as our earlier project's ctx.Render. A rule
+//! error/warning/info/success, lines, auto-clear, title), as our earlier project's
+//! ctx.Render. A rule
 //! that refuses (a name taken, the last admin) is a warning with status
 //! 200; a missing right is 400, a missing record 404, not being signed in
 //! 401.
@@ -101,6 +102,8 @@ pub const Message = struct {
     name: []const u8,
     type: []const u8,
     lines: []const []const u8,
+    @"auto-clear": bool = true,
+    title: []const u8 = "",
 };
 
 /// A call's answer in our earlier project's form: its object with `messages`. The
@@ -135,6 +138,8 @@ pub fn answer(a: std.mem.Allocator, status: std.http.Status, body: []const u8) !
         var lines: std.json.Array = .init(a);
         try lines.append(.{ .string = sentence(a, t) });
         try m.put(a, "lines", .{ .array = lines });
+        try m.put(a, "auto-clear", .{ .bool = true });
+        try m.put(a, "title", .{ .string = "" });
         try messages.append(.{ .object = m });
     }
     try obj.put(a, "messages", .{ .array = messages });

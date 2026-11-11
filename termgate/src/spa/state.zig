@@ -65,6 +65,8 @@ pub const Message = struct {
     name: []const u8 = "",
     type: []const u8 = "info",
     lines: []const []const u8 = &.{},
+    /// Goes away by itself after 5 seconds (our earlier project's; Stick: stays)
+    @"auto-clear": bool = true,
     title: []const u8 = "",
 };
 
@@ -86,10 +88,19 @@ pub fn takeMessages(answer: std.json.Value) void {
 
 /// A message of the page itself, shown with the next page drawn.
 pub fn say(kind: []const u8, text: []const u8) void {
+    sayAs(kind, text, true);
+}
+
+/// A message that stays until it is closed (our earlier project's Stick).
+pub fn sayStick(kind: []const u8, text: []const u8) void {
+    sayAs(kind, text, false);
+}
+
+fn sayAs(kind: []const u8, text: []const u8, auto_clear: bool) void {
     const a = pending_arena.allocator();
     const lines = a.alloc([]const u8, 1) catch return;
     lines[0] = a.dupe(u8, text) catch return;
-    pending.append(a, .{ .type = kind, .lines = lines }) catch {};
+    pending.append(a, .{ .type = kind, .lines = lines, .@"auto-clear" = auto_clear }) catch {};
 }
 
 /// The last answer's messages are shown with the next page drawn too.
@@ -98,7 +109,7 @@ pub fn keepMessages() void {
     for (messages) |m| {
         const lines = a.alloc([]const u8, m.lines.len) catch return;
         for (m.lines, lines) |l, *d| d.* = a.dupe(u8, l) catch "";
-        pending.append(a, .{ .name = a.dupe(u8, m.name) catch "", .type = a.dupe(u8, m.type) catch "info", .lines = lines, .title = a.dupe(u8, m.title) catch "" }) catch {};
+        pending.append(a, .{ .name = a.dupe(u8, m.name) catch "", .type = a.dupe(u8, m.type) catch "info", .lines = lines, .@"auto-clear" = m.@"auto-clear", .title = a.dupe(u8, m.title) catch "" }) catch {};
     }
     messages = &.{};
 }
@@ -109,7 +120,8 @@ pub fn has(name: []const u8) bool {
 }
 
 /// Shows the messages in the message area (our earlier project's Msg.Render);
-/// false if there were none. Each can be closed.
+/// false if there were none. Each can be closed; those that clear by
+/// themselves go after 5 seconds.
 pub fn renderMessages() bool {
     defer {
         pending = .empty;
@@ -123,12 +135,13 @@ pub fn renderMessages() bool {
     b.raw("<div class=\"row\"><div class=\"col\">");
     for ([_][]const Message{ pending.items, messages }) |list| for (list) |m| {
         const class = if (std.mem.eql(u8, m.type, "error")) "alert-error" else if (std.mem.eql(u8, m.type, "warning")) "alert-warning" else if (std.mem.eql(u8, m.type, "success")) "alert-success" else "alert-info";
-        const title = if (m.title.len > 0) m.title else if (std.mem.eql(u8, m.type, "error")) "Error" else if (std.mem.eql(u8, m.type, "warning")) "Warning" else if (std.mem.eql(u8, m.type, "success")) "Done" else "Note";
-        b.add("<div class=\"alert {s}\"><i class=\"fa fa-times button-close\"></i><p><strong>{f}</strong></p>", .{ class, app.esc(title) });
+        const title = if (m.title.len > 0) m.title else if (std.mem.eql(u8, m.type, "error")) "Error:" else if (std.mem.eql(u8, m.type, "warning")) "Warning:" else if (std.mem.eql(u8, m.type, "success")) "Success:" else "Info:";
+        b.add("<div class=\"alert {s}{s}\"><i class=\"fa fa-times button-close\"></i><p><strong>{f}</strong></p>", .{ class, if (m.@"auto-clear") " auto-clear" else "", app.esc(title) });
         for (m.lines) |l| b.add("<p>{f}</p>", .{app.esc(l)});
         b.raw("</div>");
     };
     b.raw("</div></div>");
     dom.setHtml("site-message", b.str());
+    dom.autoClearMessages();
     return true;
 }

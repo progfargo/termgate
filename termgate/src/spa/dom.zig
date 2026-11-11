@@ -61,6 +61,13 @@ pub fn focusFirstField() void {
     tg.call(void, "focusFirst", .{}) catch {};
 }
 
+/// The messages marked auto-clear go after 5 seconds (web/spa/boot.js).
+pub fn autoClearMessages() void {
+    const tg = js.global.get(js.Object, "tg") catch return;
+    defer tg.deinit();
+    tg.call(void, "autoClear", .{}) catch {};
+}
+
 pub fn focus(id: []const u8) void {
     const el = byId(id) orelse return;
     defer el.deinit();

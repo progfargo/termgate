@@ -25,9 +25,10 @@ pub const Role = enum {
 
 pub const min_password = 10;
 
-/// Argon2id cost for passwords.
+/// Argon2id cost for passwords: OWASP's recommendation (19 MiB, 2 passes,
+/// 1 lane), fast enough that signing in does not keep anyone waiting.
 pub const Cost = struct { t: u32, m: u32, p: u24 };
-pub const default_cost: Cost = .{ .t = 3, .m = 64 * 1024, .p = 1 };
+pub const default_cost: Cost = .{ .t = 2, .m = 19 * 1024, .p = 1 };
 /// For tests only
 pub const test_cost: Cost = .{ .t = 1, .m = 1024, .p = 1 };
 
@@ -36,6 +37,14 @@ pub fn hashPassword(gpa: std.mem.Allocator, io: Io, password: []const u8, cost: 
     var buf: [256]u8 = undefined;
     const s = try argon2.strHash(password, .{ .allocator = gpa, .params = .{ .t = cost.t, .m = cost.m, .p = cost.p } }, &buf, io);
     return gpa.dupe(u8, s);
+}
+
+/// Whether a stored hash was made with another cost than `cost` (it is
+/// hashed again at the next sign-in).
+pub fn needsRehash(phc: []const u8, cost: Cost) bool {
+    var buf: [64]u8 = undefined;
+    const want = std.fmt.bufPrint(&buf, "$argon2id$v=19$m={d},t={d},p={d}$", .{ cost.m, cost.t, cost.p }) catch return true;
+    return !std.mem.startsWith(u8, phc, want);
 }
 
 pub fn checkPassword(gpa: std.mem.Allocator, io: Io, phc: []const u8, password: []const u8) bool {
@@ -53,6 +62,15 @@ pub fn randomPassword(io: Io) [20]u8 {
     // 256 mod 56 is not 0: the bias is far below what matters at 20 characters
     for (raw, 0..) |b, i| out[i] = alphabet[b % alphabet.len];
     return out;
+}
+
+test "a hash with another cost is hashed again" {
+    const a = std.testing.allocator;
+    const h = try hashPassword(a, std.testing.io, "ankara12", test_cost);
+    defer a.free(h);
+    try std.testing.expect(!needsRehash(h, test_cost));
+    try std.testing.expect(needsRehash(h, default_cost));
+    try std.testing.expect(needsRehash("$argon2id$v=19$m=65536,t=3,p=1$abc$def", default_cost));
 }
 
 // --- TOTP -------------------------------------------------------------------

@@ -192,6 +192,13 @@ fn login(auth: *Auth, a: std.mem.Allocator, body: []const u8, now: i64) !Reply {
         try auth.db.userFailed(acc.id, now);
         return fail(a, .unauthorized, "wrong name or password");
     }
+    // A password stored with an older cost is stored again with today's
+    if (users.needsRehash(acc.password_hash, auth.cost)) {
+        const hash = try users.hashPassword(a, auth.io, req.password, auth.cost);
+        auth.lock.lockUncancelable(auth.io);
+        defer auth.lock.unlock(auth.io);
+        try auth.db.userSetOwnPassword(acc.id, hash);
+    }
     // Signing in to the panel is a right (panel:login); a terminal user
     // or a bot does not have it
     {
@@ -483,7 +490,7 @@ fn roleError(a: std.mem.Allocator, e: anyerror) !Reply {
 }
 
 /// Hash of a password nobody has: what an unknown name is checked against.
-const dummy_hash = "$argon2id$v=19$m=65536,t=3,p=1$dGVybWdhdGUtZHVtbXk$Zm9yLXRpbWluZy1vbmx5LW5vdC1hLXJlYWwtaGFzaA";
+const dummy_hash = "$argon2id$v=19$m=19456,t=2,p=1$dGVybWdhdGUtZHVtbXk$Zm9yLXRpbWluZy1vbmx5LW5vdC1hLXJlYWwtaGFzaA";
 
 /// First start: the first user, the superuser, with a password to hand
 /// over. Null if there are users already.

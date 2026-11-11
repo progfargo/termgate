@@ -1,27 +1,27 @@
 # termgate
 
-termgate gives users terminal access to gateways that cannot accept inbound connections (NAT, CGNAT, cellular links, changing IPs). Access is time-limited or N-use, and every session is audited. Gateways and users only make outbound connections. There is no vendor-operated server; all keys stay with the customer.
+termgate gives users terminal access to gateways that cannot accept inbound connections (NAT, CGNAT, cellular links, changing IPs). Access is limited in time, in number of sessions, or both, and every session is recorded. Gateways and users only make outbound connections. You run every part yourself; all keys stay with you.
 
-termgate is a web application the customer runs on a server: the online authority that approves every session, counts uses, logs sessions and records audit and node status, and the panel where admins and auditors work, each as their own user, from any browser. When termgate is not running, no session can be opened and open ones are ended. The relay keeps no state.
+termgate is a web application you run on a server. It approves every session, counts uses, logs sessions, records the panel's audit and the nodes' status, and serves the panel where admins and auditors work, each as their own user, from any browser. When termgate is not running, no session can be opened and open ones are ended. The relay keeps no state.
 
 ## Features
 
 - Terminal access to devices behind NAT/CGNAT, without static IPs, even while moving. No open port on the gateway.
 - Access by access key: time-limited, N-use, or both. The access key is a key and nothing more; its limits and the user's nodes are in termgate's database, checked at every session.
-- Per-node authorization: the access key fixes which nodes. A session runs as the user tgnode runs as, with that user's permissions on the device.
+- Per-node authorization: each user has a list of node names or patterns; a session opens only on a matching node. A session runs as the Linux user tgnode runs as, with that user's permissions on the device.
 - Instant revocation; active sessions are cut as well.
 - Hardware-bound node identity: a copied binary does not work on another device.
 - Live monitoring of active sessions (read-only mirror) and killing them.
 - Asset management: every node's status (online/offline), last seen time and system info (OS, memory, disk).
-- Audit: session start/end, who, which node. Recorded by termgate.
+- Session records: who, which node, start and end. Panel audit: every change made in the panel and every sign-in.
 - Session logs: every command of every session and its output (up to a set length), kept for a set number of days. Sessions have a maximum length.
-- Each customer runs separate infrastructure. The vendor has no access.
+- Each installation is separate. Nobody but its admins has access to it.
 
 ## Components
 
 | Binary | Runs on | Role | Secrets held |
 |---|---|---|---|
-| **termgate** | Customer server (with the relay, or a machine in the customer's own network) | Auth callout for every connection; node registration, access keys, revocation; approves every session from its database and counts uses; session logs, audit and node status (SQLite); the web panel for admins and auditors (users, roles) | Issuer key, its NATS keys, CA key, log key |
+| **termgate** | Your server (with the relay), or a machine in your own network | Auth callout for every connection; node registration, access keys, revocation; approves every session from its database and counts uses; session logs, audit and node status (SQLite); the web panel for admins and auditors (users, roles) | Issuer key, its NATS keys, CA key, log key |
 | **tgterm** | User's terminal (CLI) | Like `ssh`: a session in the user's own terminal | Its own user key |
 | **tgnode** | Gateway | Checks that a session request is signed by the user's key, asks termgate for approval, PTY, audit events, system info | None (key derived from hardware) |
 
@@ -30,7 +30,7 @@ browsers ──HTTPS──► nginx ──► termgate ──┐
                                tgterm   ──┴──TLS──► relay (nats-server) ◄──TLS── tgnode × N
 ```
 
-One program to install: termgate starts the relay (the official nats-server) itself from the kit in its home and keeps it running; when termgate stops, the relay stops, and with it every connection. A customer who does not want this on a hosted server installs it on a machine in their own office and opens the relay port (and, if they wish, the panel) from there.
+One program to install: termgate starts the relay (the official nats-server) itself from the kit in its home and keeps it running; when termgate stops, the relay stops, and with it every connection. If you do not want this on a hosted server, install it on a machine in your own office and open the relay port (and, if you wish, the panel) from there.
 
 The relay process still holds no access-granting key: on its own it can drop traffic but cannot open a session on any node, since session approvals are signed by termgate's issuer key and nodes verify them themselves. Session data is end-to-end encrypted, so the relay does not see it either.
 
@@ -55,7 +55,7 @@ Identity is checked once per connection, not per message: after the callout, NAT
 
 ## Who may open a session
 
-Nothing that says what a user may do travels with the user. The access key is a key (a random token) that termgate looks up in its database; once used, the user's own key is what termgate looks up. Every session is decided by termgate from its database when the node asks for approval:
+A user's permissions are not in any key. The access key and the user's key only tell termgate who the user is; which nodes, how many sessions and until when are kept in termgate's database and checked at every session, when the node asks for approval:
 
 - the user may connect: not blocked, its access not revoked, a role gives it terminal:connect;
 - the node matches one of the user's node patterns (`user.nodes`, set on the Users page: names or globs, `*` any run of characters, `?` exactly one, e.g. `ist_*`, `pump??`);
@@ -74,7 +74,7 @@ termgate keeps everything it has in one folder: `./data` in the folder it is sta
 
 **Node enrollment**
 
-The admin gives each node a name when enrolling it. Names are unique per customer (termgate enforces it) and look like identifiers whose parts are separated by `_`, like the labels of a subdomain: `ist_kadikoy_gw01`, `pump07`. Rules: 1 to 63 characters; lowercase letters, digits and `_`; starts with a letter; no trailing `_` and no `__`. Lowercase only, so `GW1` and `gw1` cannot be two nodes. A name is always a single NATS subject token. A node's name never changes: users' node patterns, the audit and the node's own subjects refer to it; a node that needs another name is deleted and enrolled again.
+The admin gives each node a name when enrolling it. Names are unique (termgate enforces it) and look like identifiers whose parts are separated by `_`, like the labels of a subdomain: `ist_kadikoy_gw01`, `pump07`. Rules: 1 to 63 characters; lowercase letters, digits and `_`; starts with a letter; no trailing `_` and no `__`. Lowercase only, so `GW1` and `gw1` cannot be two nodes. A name is always a single NATS subject token. A node's name never changes: users' node patterns, the audit and the node's own subjects refer to it; a node that needs another name is deleted and enrolled again.
 
 1. In termgate the admin creates the node: name and description. termgate generates a **node key** for it and shows it:
    ```
@@ -118,7 +118,7 @@ If termgate is not running, the connection is refused ("termgate is offline"). T
    - `in.<node>.<user>.<sid>.resize`: window size (4 bytes big-endian: cols, rows)
    - `in.<node>.<user>.<sid>.end`: close
 6. At the end tgnode sends the session end to `audit.<node>` as a request and repeats it until termgate acknowledges it (kept in memory, bounded).
-7. termgate closed means the system is closed, also for open sessions: while it has open sessions, tgnode asks termgate every 10 s whether it is there (`audit.<node>`, event "alive"). With no answer for 60 s (a termgate restart or a short relay outage fits in that) it tells the users on their screens and ends the sessions; nobody would log, watch or time-limit them.
+7. Without termgate no session stays open: while it has open sessions, tgnode asks termgate every 10 s whether it is there (`audit.<node>`, event "alive"). With no answer for 60 s (a termgate restart or a short relay outage fits in that) it tells the users on their screens and ends the sessions, because nothing would log, watch or time-limit them.
 
 **End-to-end encryption of session data.** TLS protects each connection to the relay, but inside the relay messages are in clear. Session data (`in.<...>.data`, `out.<...>.data`) is therefore encrypted between tgterm and tgnode; the relay, and whoever runs or breaks into its server, sees only ciphertext.
 - Key agreement, X25519 with one key pair per session on each side: tgterm's public key is in its signed session request; tgnode's goes to termgate in the approval request and comes back in termgate's signed approval, which tgnode passes to tgterm and tgterm verifies (signed by termgate's issuer key, for its user, node, nonce and key). The relay can replace neither key unnoticed.
@@ -131,7 +131,7 @@ If termgate is not running, the connection is refused ("termgate is offline"). T
 - Watching a session (read-only): termgate subscribes to `out.<node>.<user>.<sid>.*` and `in.<node>.<user>.<sid>.resize`, decrypts them and keeps them for the watching page, which feeds them into a libghostty-vt screen in the browser. It shows what happens from the moment watching starts; nothing is sent to the node and nodes do nothing extra.
 
 **Session logs**
-- termgate subscribes to all session traffic (`out.*.*.*.*`, `in.*.*.*.data`) and stores it as it went through the relay, unchanged: a log that is changed is not a log. Nothing extra is asked of nodes or tgterm, and no screen is kept in memory.
+- termgate subscribes to all session traffic (`out.*.*.*.*`, `in.*.*.*.data`) and stores it exactly as it went through the relay, without changing anything. Nothing extra is asked of nodes or tgterm, and no screen is kept in memory.
 - Split into commands at Enter: a command is what the user typed up to Enter (raw keys), its output what the node sent until the next Enter (raw, escape sequences included), cut at "max command output" characters; the full count is stored. Typed passwords are therefore in the log, which is why it is encrypted.
 - Encrypted in the database: what was typed and the output, each with XChaCha20-Poly1305 under the log key (`keys/log.key`, 32 random bytes, 0600, made at setup), a random nonce per field, and the session id, command number and field name authenticated with it. A copy of the database alone cannot be read, and a part moved to another session or changed does not decrypt and is shown as such. Session, order, time and output length stay readable (searching, deleting old logs). Whoever has the log key can read the logs: it sits with termgate's other keys (see "Security boundary").
 - A session's Log page lists each command with its output. The stored bytes are passed through libghostty-vt in the browser and shown as the plain text the terminal screen would show: escape sequences are applied there and are not part of the page, so they cannot reach the admin's terminal, clipboard or files. An entry that does not decrypt is marked so.
@@ -191,16 +191,16 @@ There is no JetStream: the relay keeps no state. Use counters, access keys, audi
 | Area | Choice |
 |---|---|
 | Language | Zig 0.17.1 for every binary |
-| UI (termgate) | Web panel built like our earlier project: a single-page app in Zig, compiled to WASM (`wasm32-freestanding`), that builds the page in HTML through zig-js (a copy in the repo, made to build with Zig 0.17); our earlier project's style sheet and Font Awesome. Pages are addressed by the hash (`#/user`, `#/user/update?userId=3`); buttons carry `data-action` and one listener passes them to the WASM. The server's JSON API is our earlier project's: `/api/<page>/<function>`, the right checked being `page:function` (rights.zig). The session terminal is drawn by libghostty-vt in the same WASM, as HTML text (so it can be selected and copied). Served behind nginx, which terminates HTTPS. |
+| UI (termgate) | Web panel: a single-page app in Zig, compiled to WASM (`wasm32-freestanding`), that builds the page in HTML through zig-js (a copy in the repo, made to build with Zig 0.17); a plain style sheet and Font Awesome. Pages are addressed by the hash (`#/user`, `#/user/update?userId=3`); buttons carry `data-action` and one listener passes them to the WASM. The server's JSON API: `/api/<page>/<function>`, the right checked being `page:function` (rights.zig). The session terminal is drawn by libghostty-vt in the same WASM, as HTML text (so it can be selected and copied). Served behind nginx, which terminates HTTPS. |
 | tgterm | CLI. tty in raw mode; input/output relayed over NATS; resize on SIGWINCH |
 | Terminal emulation | libghostty-vt (lib/core `vt` module), in the panel's WASM: a watched session's screen, drawn as HTML text with its colors, bold, underline and the cursor. |
 | Crypto | `std.crypto.sign.Ed25519`, SHA-256, SHA-512/256. nkeys (base32 + CRC16), JWT and the auth callout are our own code. |
 | TLS | Zig std TLS client, pinned CA |
 | NATS client | Our own (`lib/core`): core protocol, request/reply |
 | NATS server | Official `nats-server` binary, started and kept running by termgate itself (the relay); fixed configuration with auth callout, no JetStream |
-| PTY (tgnode) | `openpty` + `fork` on Linux, ConPTY on Windows |
+| PTY (tgnode) | `openpty` + `fork` (Linux) |
 | Local data (termgate) | SQLite: nodes and their last status, users with their node patterns, access keys (token hashes) with their limits and use counts, audit. |
-| Targets | termgate and tgterm: Linux, Windows, macOS. tgnode: linux amd64/arm64/arm5-7, windows amd64 |
+| Targets | Linux. tgnode: amd64, arm64, arm v5-v7 (cross-compiled). Other systems are not tested. |
 
 ## Layout
 
@@ -221,13 +221,13 @@ Each binary builds on its own with its own `build.zig` and `build.zig.zon`, and 
 
 ## UI (termgate web panel)
 
-- Built like our earlier project (its `spa/`), with its pieces translated to Zig: `main` wires the routes and actions; `dom` sets HTML and reads fields; `router` follows the hash; `layout` is the frame (header with the top menu and the search box, left menu with the signed-in user at its bottom, message area, `#main-content`, footer); `state` holds the signed-in user, its rights and the messages; `fetch` makes the API calls, asynchronously: each event of the page (a hash change, a click, a tick of a watched session) runs as a job; when it asks for an answer that has not come, the request goes out and the rest of that run changes nothing, and when the answer comes the job runs again from the start with the answers it has. A page's code thus reads from top to bottom, as our earlier project's inside a goroutine. From our earlier project as they are: `lib/tax` (a tree the menus are built on: an item per page, visible by the user's right), `lib/cargo` (a page's state as named variables: every address a page makes is written by it and every address it opens is read by it), the ruler (page numbers), the page title, combo boxes, and messages (Error:, Warning:, Info:, Success:, closed by hand or after 5 seconds). The look is our earlier project's style sheet, unchanged, light or dark.
-- Each page is a file that writes its HTML into a buffer and sets `#main-content`: a list with filters and paging, a form for insert and one for update, delete asks first. A page reads its state from its address (`#/user?key=ali&pn=2`, `#/user/update?userId=3`) with cargo. As in our earlier project, searching, paging and filtering a list change its cargo and draw it again without changing the address; the page title's link button copies the list's address with its state.
-- The API (`/api/<page>/<function>`, JSON in and out): `browse`, `get`, `insert`, `update`, `delete` and the page's own functions (e.g. `user/role_grant`, `user/select`, `role/right_update`, `node/approve`). `/api/init` tells the page who is signed in and its rights; `/api/login`, `/api/login/code`, `/api/logout`. Every answer may carry `messages` (name, type error/warning/info/success, lines, auto-clear, title): a refused rule is a warning with status 200, a missing right is 400, a missing record 404, as in our earlier project. Only calls with the header `x-termgate: spa` are answered.
-- Lists are searched and paged on the server, as in our earlier project: a search box in the header, 20 rows a page, page numbers under the list, the search word marked in the rows (nodes, users, sessions, audit).
+- Structure: `main` wires the routes and actions; `dom` sets HTML and reads fields; `router` follows the hash; `layout` is the frame (header with the top menu and the search box, left menu with the signed-in user at its bottom, message area, `#main-content`, footer); `state` holds the signed-in user, its rights and the messages; `fetch` makes the API calls, asynchronously: each event of the page (a hash change, a click, a tick of a watched session) runs as a job; when it asks for an answer that has not come, the request goes out and the rest of that run changes nothing, and when the answer comes the job runs again from the start with the answers it has. A page's code thus reads from top to bottom. Shared pieces: `lib/tax` (a tree the menus are built on: an item per page, visible by the user's right), `lib/cargo` (a page's state as named variables: every address a page makes is written by it and every address it opens is read by it), the ruler (page numbers), the page title, combo boxes, and messages (Error:, Warning:, Info:, Success:, closed by hand or after 5 seconds). The style sheet has a light and a dark theme.
+- Each page is a file that writes its HTML into a buffer and sets `#main-content`: a list with filters and paging, a form for insert and one for update, delete asks first. A page reads its state from its address (`#/user?key=ali&pn=2`, `#/user/update?userId=3`) with cargo. Searching, paging and filtering a list change its cargo and draw it again without changing the address; the page title's link button copies the list's address with its state.
+- The API (`/api/<page>/<function>`, JSON in and out): `browse`, `get`, `insert`, `update`, `delete` and the page's own functions (e.g. `user/role_grant`, `user/select`, `role/right_update`, `node/approve`). `/api/init` tells the page who is signed in and its rights; `/api/login`, `/api/login/code`, `/api/logout`. Every answer may carry `messages` (name, type error/warning/info/success, lines, auto-clear, title): a refused rule is a warning with status 200, a missing right is 400, a missing record 404. Only calls with the header `x-termgate: spa` are answered.
+- Lists are searched and paged on the server: a search box in the header, 20 rows a page, page numbers under the list, the search word marked in the rows (nodes, users, sessions, audit).
 - Installable (PWA): a manifest and icons let phones and desktops install the panel as an app. Nothing is kept for offline use, so there is no service worker.
 
-- Users, roles and rights, with our earlier project's rules. A right is a module and one of its actions (`termgate/src/rights.zig`): panel (sign in), nodes (browse, insert, update, delete), sessions (browse, watch, read logs, end), audit (browse), users (browse, insert, update, reset password, delete, see roles, give roles, take roles, give terminal access), roles (browse, insert, update, delete, change rights), profile (browse, change own password), configuration (browse, update), help (browse), terminal (connect). Rights are given to roles and roles to users; a user without a role has no right. Tables: `role`, `roleRight`, `userRole`. A new database has the roles `admin` (every right but terminal:connect), `auditor` (reading, and its own password) and `terminal_user` (terminal:connect). The server checks the right on every call; the panel shows only the pages and buttons the user has the right for. The rules:
+- Users, roles and rights. A right is a module and one of its actions (`termgate/src/rights.zig`): panel (sign in), nodes (browse, insert, update, delete), sessions (browse, watch, read logs, end), audit (browse), users (browse, insert, update, reset password, delete, see roles, give roles, take roles, give terminal access), roles (browse, insert, update, delete, change rights), profile (browse, change own password), configuration (browse, update), help (browse), terminal (connect). Rights are given to roles and roles to users; a user without a role has no right. Tables: `role`, `roleRight`, `userRole`. A new database has the roles `admin` (every right but terminal:connect), `auditor` (reading, and its own password) and `terminal_user` (terminal:connect). The server checks the right on every call; the panel shows only the pages and buttons the user has the right for. The rules:
   - The superuser is the first user, named `superuser` (`termgate init`): every right. Nobody can change it, block it, delete it, give it a new password, or give or take its roles; it changes its own password in its profile.
   - The role `admin` cannot be deleted, and only the superuser changes it. The last user with the role `admin` cannot be deleted or lose the role.
   - Acting as another user (users.select): only the superuser may do it, and it is no right a role gives. The superuser sees and uses the panel as another user does, with that user's rights, until it goes back (users.unselect). The audit names both ("superuser as veli"). Used to test what a role allows.
@@ -235,42 +235,30 @@ Each binary builds on its own with its own `build.zig` and `build.zig.zon`, and 
 - Menus: on the left Nodes, Sessions, Audit, and Admin with User Management (Users, Roles) and Configuration, then the signed-in user and the logo; at the top Profile, Help, Logout and the theme switch.
 - Signing in: user name and password, then a 6-digit code from an authenticator app (TOTP, RFC 6238, as in Google Authenticator). The second step is set up at the user's first sign-in: the panel shows a new secret, as a QR code to scan (drawn by the server, nayuki's qrcodegen) and as text to type, and the first code confirms it. A debug build (local use, the tests) has no second step and listens on 127.0.0.1 or localhost only; a release build, the one for a server, always has it. A code is accepted once. Wrong passwords and codes count together: from the fifth in a row the user is locked for 1, 2, 4 ... minutes, at most an hour. An unknown name and a wrong password get the same answer after the same work. While the password is checked the form is disabled and its button shows a spinning wheel.
 - Passwords are stored as Argon2id hashes (19 MiB, 2 passes, OWASP's recommendation; a hash made with other parameters is made again at the next sign-in), TOTP secrets encrypted with the log key. A browser session is a random token in an HttpOnly, Secure, SameSite=Strict cookie; the server stores only its hash. It lasts 12 hours; a new password or disabling the user ends its sessions.
-- No sign-up page: users are created by a user with the right, who hands over the generated password (`termgate init` prints the superuser's). No "forgot password" either: an admin resets the user, which gets a new password and sets up its second step again; the reset is recorded in the audit. There is no reset on the server (no command for it), so a password never changes without a record: a customer keeps more than one admin.
+- No sign-up page: users are created by a user with the right, who hands over the generated password (`termgate init` prints the superuser's). No "forgot password" either: an admin resets the user, which gets a new password and sets up its second step again; the reset is recorded in the audit. There is no reset on the server (no command for it), so a password never changes without a record: keep more than one admin.
 - termgate sends no e-mail to anyone: no mail server to configure. Access keys and node keys are shown in the panel and handed over by the admin.
 - Nodes page: a table of nodes with state (online/offline, waiting for approval, disabled), last seen and system info (OS, architecture, CPUs, memory, disk, tgnode version), and the counts on the right. A node's page: connection (online, last seen, hardware key, added), full system info with a Refresh button (`status.req.<node>`, also sent when the page opens), its open sessions (with End) and its last sessions, and Disable/Enable, New node key, Delete.
 - Sessions page: all sessions, searched and paged, with node (online/offline) and session (open/ended) state, which the page asks again every 5 s and shows without a reload; an open one has Watch (read-only) and End, each has Log. Watching a session shows its terminal; End ends it on the node, and the page stays with the last screen.
 - Audit page: what users did in the panel: every changing call and every sign-in, failed ones included, with who, when, what (the node or user it was about) and whether it was done or denied. Recorded on the server for every changing call, whatever the page does.
-- Configuration page: the relay (address, CA fingerprint), the session settings (max command output, max session length, keep session logs) and the ruler length (page numbers on each side of the current one, 2 to 10, our earlier project's rulerLen).
+- Configuration page: the relay (address, CA fingerprint), the session settings (max command output, max session length, keep session logs) and the ruler length (page numbers on each side of the current one, 2 to 10).
 
 ## Deployment and security boundary
 
-**Deployment: single tenant, open source, no license.** Each customer runs its own termgate (on a server) and its own relay. termgate holds the customer's keys; the relay holds none. The vendor runs no part of the customer's system and has no access to it.
+**Deployment: one installation per organization.** Each organization runs its own termgate (on a server) and its own relay. termgate holds the keys; the relay holds none. Nobody outside runs any part of it or has access to it.
 
-**Security boundary.** termgate protects access to the nodes: only termgate's decisions open sessions, the relay holds no key, NATS keeps every connection to its own subjects. It does not protect against someone who controls the server termgate runs on: termgate's keys and database sit in its folder, readable by its service account only (folder 0700, files 0600, whatever was there before). Keeping that server safe is the customer's job. The web panel is the exposed part: a customer who finds that too risky installs termgate on a machine in their own office and decides themselves who can reach it. The same holds for a user: tgterm keeps the user's key in a file readable by that user only, like an SSH key; keeping it is the user's job. A stolen user key is limited by the access key (uses, end time) and the user's nodes, can be revoked by the admin at once, and every session it opens is logged. Session logs are additionally encrypted in the database (log key in the folder), so a copy of the database alone cannot be read.
+**Security boundary.** termgate protects access to the nodes: only termgate's decisions open sessions, the relay holds no key, NATS keeps every connection to its own subjects. It does not protect against someone who controls the server termgate runs on: termgate's keys and database sit in its folder, readable by its service account only (folder 0700, files 0600, whatever was there before). Keeping that server safe is your job. The web panel is the exposed part: if that is too risky for you, install termgate on a machine in your own office and decide yourself who can reach it. The same holds for a user: tgterm keeps the user's key in a file readable by that user only, like an SSH key; keeping it is the user's job. A stolen user key is limited by the access key (uses, end time) and the user's nodes, can be revoked by the admin at once, and every session it opens is logged. Session logs are additionally encrypted in the database (log key in the folder), so a copy of the database alone cannot be read.
 
 ## Origin: the farlogin prototype
 
-termgate builds on farlogin, a prototype designed and developed by progfargo. The following core ideas and solutions were introduced in farlogin and proven to work there:
+termgate is the rewrite of farlogin (https://github.com/progfargo/farlogin), a prototype by progfargo. These ideas come from farlogin and were proven there:
 
-- **Outbound meeting point.** Devices and operators both connect out to a central NATS broker, so NAT, CGNAT and changing IPs stop being a problem.
-- **Hardware-bound node identity.** The key is derived from CPU, DMI, NIC and disk data and used as an Ed25519 nkey; no secret on disk, a copied binary does not work.
-- **Short-lived, per-session authorization.** An Ed25519-signed JWT (`sid`, `jti`, `exp`) that the node verifies offline, with `jti` replay rejection and clock skew tolerance.
-- **Per-node NATS permissions.** Each node can only talk on its own subjects.
-- **Terminal protocol.** Separate input/output subjects, a 4-byte resize message, and an `.end` signal that sends SIGHUP to the shell so the session ends cleanly.
-- **One-time install token.** Node enrollment with a single-use token and the hardware public key; termgate's node key and admin approval build on it.
-- **Embedded NATS.** The idea of shipping the server side as a single binary.
-- **Audit.** First-use reporting and session records.
-- **Cross-compilation and distribution.** The gateway binary for linux amd64/arm64/arm5-7 and windows, with ConPTY on Windows.
-- **Positioning.** A last-resort console for IoT fleets, and the screen-access vision (Farscreen).
-
-The main decisions in this work were also made by progfargo:
-- A web panel on a server, built like our earlier project: a JSON API and a single-page app in Zig.
-- A separate relay per customer, run by the customer.
-- One program for the authority, the panel and the relay.
-- Time-limited and N-use access keys.
-- AI bots accessing and being monitored as users, through the same model (planned, see Open decisions).
-- Naming.
-- Writing everything in Zig, following repeto's discipline.
+- Devices and operators both connect out to a central NATS server, so NAT, CGNAT and changing IPs are not a problem.
+- The node's key is derived from its hardware (CPU, DMI, NIC and disk data) and used as an Ed25519 nkey; no secret on disk, a copied binary does not work.
+- Per-node NATS permissions: each node can only use its own subjects.
+- The terminal protocol: separate input and output subjects, a 4-byte resize message, and an end message that hangs up the shell.
+- Node enrollment with a single-use token and the hardware public key.
+- One program on the server side.
+- One gateway binary cross-compiled for many CPUs.
 
 ## Open decisions
 

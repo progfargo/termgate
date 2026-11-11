@@ -60,7 +60,6 @@ const Item = struct { name: []const u8, url: []const u8, label: []const u8, icon
 fn leftMenu(active: []const u8) void {
     const main_items = [_]Item{
         .{ .name = "node", .url = "#/node", .label = "Nodes", .icon = "fas fa-server", .visible = state.can("node", "browse") },
-        .{ .name = "person", .url = "#/person", .label = "People", .icon = "fas fa-users", .visible = state.can("user", "browse") },
         .{ .name = "session", .url = "#/session", .label = "Sessions", .icon = "fas fa-terminal", .visible = state.can("session", "browse") },
         .{ .name = "audit", .url = "#/audit", .label = "Audit", .icon = "fas fa-clipboard-list", .visible = state.can("audit", "browse") },
     };

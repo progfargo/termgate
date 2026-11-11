@@ -28,6 +28,7 @@
     tg_answer_len() { return answer.length; },
     tg_answer_read(out) { new Uint8Array(zjs.memory.buffer, out, answer.length).set(answer); },
     tg_log(ptr, len) { console.log(zjs.loadString(ptr, len)); },
+    tg_now() { return Date.now(); },
   };
 
   // Clipboard, for the panel's Copy buttons

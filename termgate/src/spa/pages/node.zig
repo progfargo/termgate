@@ -1,0 +1,339 @@
+//! Nodes (#/node): the gateways that run tgnode. The list with each node's
+//! state, connection and system; New (a node key and the command for the
+//! device); Info (#/node/display: connection, system with Refresh, its
+//! sessions); New Key, Approve/Reject a registration, Disable/Enable,
+//! Delete (asks first). A disabled or deleted node is disconnected.
+
+const std = @import("std");
+const app = @import("../app.zig");
+const dom = @import("../dom.zig");
+const state = @import("../state.zig");
+const fetch = @import("../fetch.zig");
+const layout = @import("../layout.zig");
+const router = @import("../router.zig");
+const content = @import("../content.zig");
+const Form = @import("../form.zig").Form;
+
+pub const Node = struct {
+    id: i64,
+    name: []const u8,
+    description: []const u8 = "",
+    state: []const u8 = "",
+    hardware_key: ?[]const u8 = null,
+    request_key: ?[]const u8 = null,
+    status: ?[]const u8 = null,
+    created: i64 = 0,
+    last_seen: ?i64 = null,
+    token_expires: ?i64 = null,
+    online: bool = false,
+};
+
+/// What tgnode reports; every field may be missing
+const Status = struct {
+    version: []const u8 = "",
+    hostname: []const u8 = "",
+    os: []const u8 = "",
+    kernel: []const u8 = "",
+    arch: []const u8 = "",
+    cpus: u32 = 0,
+    uptime_s: u64 = 0,
+    load: [3]f64 = .{ 0, 0, 0 },
+    mem_total_kb: u64 = 0,
+    mem_available_kb: u64 = 0,
+    disk_total_bytes: u64 = 0,
+    disk_free_bytes: u64 = 0,
+};
+
+pub const Session = struct {
+    sid: []const u8,
+    node: []const u8 = "",
+    user_key: []const u8 = "",
+    person: []const u8 = "",
+    started: i64 = 0,
+    ended: ?i64 = null,
+    exit_status: ?i64 = null,
+};
+
+fn nodes() ?[]const Node {
+    const answer = fetch.postRaw("node/browse", "[]") orelse return null;
+    return fetch.fieldAs([]const Node, answer, "data");
+}
+
+fn nodeById(id: i64) ?Node {
+    const answer = fetch.post("node/get", .{id}) orelse return null;
+    return fetch.fieldAs(Node, answer, "data") orelse {
+        router.renderNotFound();
+        return null;
+    };
+}
+
+fn statusOf(n: Node) ?Status {
+    return std.json.parseFromSliceLeaky(Status, app.arena(), n.status orelse return null, .{ .ignore_unknown_fields = true }) catch null;
+}
+
+fn begin() void {
+    dom.setBodyId("");
+    layout.renderDefault("node");
+}
+
+fn stateLabel(b: *app.Buf, n: Node) void {
+    if (std.mem.eql(u8, n.state, "approved")) {
+        if (n.online) content.label(b, "success", "online") else content.label(b, "default", "offline");
+    } else if (std.mem.eql(u8, n.state, "pending")) {
+        content.label(b, "warning", "waiting for approval");
+    } else if (std.mem.eql(u8, n.state, "waiting")) {
+        content.label(b, "primary", "waiting for the device");
+    } else content.label(b, "error", n.state);
+}
+
+fn gb(kb: u64) f64 {
+    return @as(f64, @floatFromInt(kb)) / (1024 * 1024);
+}
+
+/// "just now", "5 min ago", "3 h ago", "2 days ago"
+pub fn ago(t: ?i64) []const u8 {
+    const v = t orelse return "never";
+    const d = @max(app.now() - v, 0);
+    if (d < 60) return "just now";
+    if (d < 3600) return std.fmt.allocPrint(app.arena(), "{d} min ago", .{@divTrunc(d, 60)}) catch "";
+    if (d < 86400) return std.fmt.allocPrint(app.arena(), "{d} h ago", .{@divTrunc(d, 3600)}) catch "";
+    return std.fmt.allocPrint(app.arena(), "{d} days ago", .{@divTrunc(d, 86400)}) catch "";
+}
+
+// --- Browse -------------------------------------------------------------------
+
+pub fn browse(_: []const u8) void {
+    if (!state.can("node", "browse")) return router.renderBadRequest();
+    begin();
+    // Fresh system info from the online nodes, for the next look
+    _ = fetch.postRaw("node/status_all", "[]");
+    const list = nodes() orelse return;
+    var online: usize = 0;
+    var pending: usize = 0;
+    for (list) |n| {
+        if (n.online) online += 1;
+        if (std.mem.eql(u8, n.state, "pending")) pending += 1;
+    }
+    var b: app.Buf = .{};
+    content.header(&b, &.{.{ "Nodes", "" }});
+    content.commandStart(&b);
+    if (state.can("node", "insert")) b.raw("<a href=\"#/node/insert\" class=\"button button-default button-sm\">New</a>");
+    b.raw("<a href=\"#/node\" class=\"button button-default button-sm\" title=\"Read again.\"><i class=\"fas fa-rotate fa-fw\"></i></a>");
+    b.add("<span class=\"command-note\">{d} nodes · {d} online · {d} waiting for approval</span>", .{ list.len, online, pending });
+    content.commandEnd(&b);
+    content.contentStart(&b);
+    b.raw("<table><thead><tr><th>Name</th><th>State</th><th>Last seen</th><th>System</th><th class=\"right\">Command</th></tr></thead><tbody>");
+    if (list.len == 0) b.raw("<tr><td colspan=\"5\">Empty list.</td></tr>");
+    for (list) |n| {
+        b.add("<tr><td><a href=\"#/node/display?nodeId={d}\">{f}</a>", .{ n.id, app.esc(n.name) });
+        if (n.description.len > 0) b.add("<br><small>{f}</small>", .{app.esc(n.description)});
+        b.raw("</td><td>");
+        stateLabel(&b, n);
+        b.add("</td><td>{s}</td><td>", .{if (std.mem.eql(u8, n.state, "approved")) ago(n.last_seen) else "-"});
+        if (statusOf(n)) |st| {
+            b.add("{f} · {f} {f} · {d} CPUs<br><small>Memory {d:.1} / {d:.1} GB · Disk {d:.0} GB free · tgnode {f}</small>", .{
+                app.esc(st.hostname),                                         app.esc(st.os),                    app.esc(st.arch), st.cpus,
+                gb(st.mem_total_kb -| st.mem_available_kb),                   gb(st.mem_total_kb),               @as(f64, @floatFromInt(st.disk_free_bytes)) / 1e9,
+                app.esc(st.version),
+            });
+        } else b.raw("-");
+        b.raw("</td><td class=\"right\"><div class=\"button-group-fixed\">");
+        commands(&b, n, "xs");
+        b.raw("</div></td></tr>");
+    }
+    b.raw("</tbody></table>");
+    content.contentEnd(&b);
+    content.show(&b);
+}
+
+/// The buttons for a node, by its state and the user's rights.
+fn commands(b: *app.Buf, n: Node, size: []const u8) void {
+    b.add("<a href=\"#/node/display?nodeId={d}\" class=\"button button-default button-{s}\">Info</a>", .{ n.id, size });
+    const is = struct {
+        fn f(x: Node, s: []const u8) bool {
+            return std.mem.eql(u8, x.state, s);
+        }
+    }.f;
+    if (state.can("node", "update") and is(n, "pending")) {
+        b.add("<button type=\"button\" data-action=\"nodeApprove\" data-id=\"{d}\" class=\"button button-primary button-{s}\">Approve</button>", .{ n.id, size });
+        b.add("<button type=\"button\" data-action=\"nodeReject\" data-id=\"{d}\" class=\"button button-default button-{s}\">Reject</button>", .{ n.id, size });
+    }
+    if (state.can("node", "insert") and (is(n, "waiting") or is(n, "pending")))
+        b.add("<button type=\"button\" data-action=\"nodeNewKey\" data-id=\"{d}\" class=\"button button-default button-{s}\">New Key</button>", .{ n.id, size });
+    if (state.can("node", "update") and (is(n, "approved") or is(n, "disabled"))) {
+        const off = is(n, "disabled");
+        b.add("<button type=\"button\" data-action=\"nodeSetDisabled\" data-id=\"{d}\" data-off=\"{s}\" data-name=\"{f}\" class=\"button button-{s} button-{s}\">{s}</button>", .{ n.id, if (off) "0" else "1", app.esc(n.name), if (off) "default" else "warning", size, if (off) "Enable" else "Disable" });
+    }
+    if (state.can("node", "delete")) b.add("<a href=\"#/node/delete?nodeId={d}\" class=\"button button-error button-{s}\">Delete</a>", .{ n.id, size });
+}
+
+// --- Insert and the node key ------------------------------------------------------
+
+pub fn insert(_: []const u8) void {
+    if (!state.can("node", "insert")) return router.renderBadRequest();
+    begin();
+    renderInsert("", "");
+}
+
+fn renderInsert(name: []const u8, description: []const u8) void {
+    var b: app.Buf = .{};
+    content.header(&b, &.{ .{ "Nodes", "#/node" }, .{ "New Record", "" } });
+    content.contentStart(&b);
+    b.raw("<form>");
+    content.field(&b, "node-name-input", "Name:", name, .{ .required = true, .max = 63, .help = "Lowercase letters, digits and _, starting with a letter: ist_kadikoy_gw01" });
+    content.field(&b, "node-desc-input", "Description:", description, .{ .max = 255, .help = "Where it is, what it does (optional)." });
+    b.raw("<p>termgate makes a node key; it is used once, on the device, within a day.</p>");
+    b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"nodeInsert\" class=\"button button-primary button-sm\">Submit</button> <a href=\"#/node\" class=\"button button-default button-sm\">Cancel</a></div></div>");
+    b.raw("</form>");
+    content.contentEnd(&b);
+    content.show(&b);
+}
+
+pub fn submitInsert(f: Form) void {
+    const name = f.trimmed("node-name-input");
+    const description = f.trimmed("node-desc-input");
+    const answer = fetch.post("node/insert", .{ .name = name, .description = description }) orelse return;
+    if (fetch.refused()) return renderInsert(name, description);
+    showKey(name, fetch.fieldAs(Key, answer, "data") orelse return);
+}
+
+pub fn newKey(f: Form) void {
+    const id = f.int("id");
+    const n = nodeById(id) orelse return;
+    const answer = fetch.post("node/new_key", .{ .id = id }) orelse return;
+    if (fetch.refused()) {
+        state.keepMessages();
+        return router.go("/node");
+    }
+    begin();
+    showKey(n.name, fetch.fieldAs(Key, answer, "data") orelse return);
+}
+
+/// The node key, once, with the command for the device.
+const Key = struct { code: []const u8 };
+
+fn showKey(name: []const u8, key: Key) void {
+    const command = std.fmt.allocPrint(app.arena(), "tgnode --registration {s}", .{key.code}) catch return;
+    var b: app.Buf = .{};
+    content.header(&b, &.{ .{ "Nodes", "#/node" }, .{ name, "" }, .{ "Node Key", "" } });
+    content.contentStart(&b);
+    b.raw("<p>Run this once on the device, within a day. The device then asks to be approved here.</p>");
+    b.add("<pre class=\"code\">{f}</pre>", .{app.esc(command)});
+    content.contentEnd(&b);
+    content.commandStart(&b);
+    b.add("<button type=\"button\" data-action=\"copy\" data-text=\"{f}\" class=\"button button-default button-sm\"><i class=\"fa fa-copy\"></i> Copy</button>", .{app.esc(command)});
+    b.raw("<a href=\"#/node\" class=\"button button-default button-sm\">Done</a>");
+    content.commandEnd(&b);
+    content.show(&b);
+}
+
+// --- State changes ------------------------------------------------------------------
+
+pub fn approve(f: Form) void {
+    afterChange(fetch.post("node/approve", .{f.int("id")}), "The node has been approved.");
+}
+
+pub fn reject(f: Form) void {
+    afterChange(fetch.post("node/reject", .{f.int("id")}), "The registration has been rejected.");
+}
+
+pub fn setDisabled(f: Form) void {
+    const off = std.mem.eql(u8, f.str("off"), "1");
+    const answer = fetch.post("node/set_disabled", .{ f.int("id"), off });
+    // A disabled node is disconnected at once
+    if (answer != null and off and !fetch.refused()) _ = fetch.post("node/kick", .{f.str("name")});
+    afterChange(answer, if (off) "The node has been disabled and disconnected." else "The node has been enabled.");
+}
+
+fn afterChange(answer: ?std.json.Value, done: []const u8) void {
+    if (answer == null) return;
+    if (fetch.refused()) state.keepMessages() else state.say("success", done);
+    // Back to where the button was
+    router.go(dom.hash());
+}
+
+// --- Display ------------------------------------------------------------------------
+
+pub fn display(query: []const u8) void {
+    if (!state.can("node", "browse")) return router.renderBadRequest();
+    begin();
+    const id = app.queryInt(query, "nodeId");
+    const n = nodeById(id) orelse return;
+    var b: app.Buf = .{};
+    content.header(&b, &.{ .{ "Nodes", "#/node" }, .{ n.name, "" } });
+    content.commandStart(&b);
+    commands(&b, n, "sm");
+    if (n.online) b.add("<button type=\"button\" data-action=\"nodeRefresh\" data-name=\"{f}\" class=\"button button-default button-sm\"><i class=\"fas fa-rotate fa-fw\"></i> Refresh</button>", .{app.esc(n.name)});
+    content.commandEnd(&b);
+    content.contentStart(&b);
+    b.raw("<table><tbody>");
+    b.add("<tr><th class=\"fixed-middle\">Name:</th><td>{f}</td></tr><tr><th>Description:</th><td>{f}</td></tr><tr><th>State:</th><td>", .{ app.esc(n.name), app.esc(n.description) });
+    stateLabel(&b, n);
+    b.add("</td></tr><tr><th>Last seen:</th><td>{s}</td></tr><tr><th>Added:</th><td>{s}</td></tr>", .{ ago(n.last_seen), content.dateTime(n.created) });
+    if (n.hardware_key) |k| b.add("<tr><th>Hardware key:</th><td><small>{f}</small></td></tr>", .{app.esc(k)});
+    if (n.request_key) |k| b.add("<tr><th>Asks to register with:</th><td><small>{f}</small></td></tr>", .{app.esc(k)});
+    if (std.mem.eql(u8, n.state, "waiting")) if (n.token_expires) |t| b.add("<tr><th>Node key valid until:</th><td>{s} UTC</td></tr>", .{content.dateTime(t)});
+    if (statusOf(n)) |st| {
+        b.add("<tr><th>Hostname:</th><td>{f}</td></tr><tr><th>System:</th><td>{f}, kernel {f}, {f}, {d} CPUs</td></tr>", .{ app.esc(st.hostname), app.esc(st.os), app.esc(st.kernel), app.esc(st.arch), st.cpus });
+        const used = st.mem_total_kb -| st.mem_available_kb;
+        b.add("<tr><th>Memory:</th><td>{d:.1} of {d:.1} GB used</td></tr>", .{ gb(used), gb(st.mem_total_kb) });
+        b.add("<tr><th>Disk:</th><td>{d:.0} GB free of {d:.0} GB</td></tr>", .{ @as(f64, @floatFromInt(st.disk_free_bytes)) / 1e9, @as(f64, @floatFromInt(st.disk_total_bytes)) / 1e9 });
+        b.add("<tr><th>Load:</th><td>{d:.2} {d:.2} {d:.2}, up {d} h</td></tr><tr><th>tgnode:</th><td>{f}</td></tr>", .{ st.load[0], st.load[1], st.load[2], st.uptime_s / 3600, app.esc(st.version) });
+    }
+    b.raw("</tbody></table>");
+    content.contentEnd(&b);
+
+    // Its sessions: the open ones first
+    if (state.can("session", "browse")) {
+        const answer = fetch.post("node/sessions", .{ n.name, 20 });
+        const sessions = if (answer) |ans| fetch.fieldAs([]const Session, ans, "data") orelse &.{} else &.{};
+        b.raw("<div class=\"row row-header\"><div class=\"col\"><div class=\"page-title\"><h3>Sessions</h3></div></div></div>");
+        content.contentStart(&b);
+        b.raw("<table><thead><tr><th>Who</th><th>Started</th><th>Ended</th></tr></thead><tbody>");
+        if (sessions.len == 0) b.raw("<tr><td colspan=\"3\">No sessions yet.</td></tr>");
+        for (sessions) |s| b.add("<tr><td>{f}</td><td>{s}</td><td>{s}</td></tr>", .{ app.esc(s.person), content.dateTime(s.started), if (s.ended) |e| content.dateTime(e) else "open" });
+        b.raw("</tbody></table>");
+        content.contentEnd(&b);
+    }
+    content.show(&b);
+}
+
+pub fn refresh(f: Form) void {
+    _ = fetch.post("node/status", .{f.str("name")}) orelse return;
+    state.say("info", "The node was asked for its system info; it shows here in a moment.");
+    router.go(dom.hash());
+}
+
+// --- Delete -------------------------------------------------------------------------
+
+var delete_id: i64 = 0;
+
+pub fn delete(query: []const u8) void {
+    if (!state.can("node", "delete")) return router.renderBadRequest();
+    begin();
+    delete_id = app.queryInt(query, "nodeId");
+    const n = nodeById(delete_id) orelse return;
+    var b: app.Buf = .{};
+    content.header(&b, &.{ .{ "Nodes", "#/node" }, .{ "Delete Record", "" } });
+    content.contentStart(&b);
+    b.raw("<p>Delete this node? It is disconnected at once and has to register again to come back.</p><table><tbody>");
+    b.add("<tr><th class=\"fixed-middle\">Name:</th><td>{f}</td></tr><tr><th>Description:</th><td>{f}</td></tr><tr><th>State:</th><td>", .{ app.esc(n.name), app.esc(n.description) });
+    stateLabel(&b, n);
+    b.raw("</td></tr></tbody></table>");
+    content.contentEnd(&b);
+    content.commandStart(&b);
+    b.add("<button type=\"button\" data-action=\"nodeDelete\" data-name=\"{f}\" class=\"button button-error button-sm\">Yes</button><a href=\"#/node\" class=\"button button-default button-sm\">Cancel</a>", .{app.esc(n.name)});
+    content.commandEnd(&b);
+    content.show(&b);
+}
+
+pub fn submitDelete(f: Form) void {
+    _ = fetch.post("node/delete", .{delete_id}) orelse return;
+    if (fetch.refused()) {
+        state.keepMessages();
+    } else {
+        _ = fetch.post("node/kick", .{f.str("name")});
+        state.say("success", "Record has been deleted.");
+    }
+    router.go("/node");
+}

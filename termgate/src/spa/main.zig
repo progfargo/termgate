@@ -18,6 +18,7 @@ const welcome = @import("pages/welcome.zig");
 const user = @import("pages/user.zig");
 const role = @import("pages/role.zig");
 const profile = @import("pages/profile.zig");
+const node = @import("pages/node.zig");
 
 const routes = [_]router.Route{
     .{ .path = "/login", .handler = login.render, .public = true },
@@ -33,6 +34,10 @@ const routes = [_]router.Route{
     .{ .path = "/role/update", .handler = role.update },
     .{ .path = "/role/right", .handler = role.right },
     .{ .path = "/role/delete", .handler = role.delete },
+    .{ .path = "/node", .handler = node.browse },
+    .{ .path = "/node/insert", .handler = node.insert },
+    .{ .path = "/node/display", .handler = node.display },
+    .{ .path = "/node/delete", .handler = node.delete },
     .{ .path = "/profile", .handler = profile.render },
     .{ .path = "/profile/update_pass", .handler = profile.updatePass },
 };
@@ -60,6 +65,13 @@ const actions = [_]Action{
     .{ .name = "roleRightUpdate", .run = role.submitRight },
     .{ .name = "roleDelete", .run = role.submitDelete },
     .{ .name = "profileUpdatePass", .run = profile.submitUpdatePass },
+    .{ .name = "nodeInsert", .run = node.submitInsert },
+    .{ .name = "nodeNewKey", .run = node.newKey },
+    .{ .name = "nodeApprove", .run = node.approve },
+    .{ .name = "nodeReject", .run = node.reject },
+    .{ .name = "nodeSetDisabled", .run = node.setDisabled },
+    .{ .name = "nodeRefresh", .run = node.refresh },
+    .{ .name = "nodeDelete", .run = node.submitDelete },
 };
 
 /// The first page the user may open.

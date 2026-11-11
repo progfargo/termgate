@@ -19,6 +19,15 @@ pub fn beginEvent() void {
     _ = event_arena.reset(.retain_capacity);
 }
 
+// web/spa/boot.js
+extern "env" fn tg_now() f64;
+
+/// Unix seconds, from the browser's clock.
+pub fn now() i64 {
+    if (builtin.cpu.arch != .wasm32) return 0;
+    return @intFromFloat(tg_now() / 1000);
+}
+
 /// HTML written piece by piece. `add` formats; text from users goes in
 /// through `{f}` with `esc(text)`, which escapes it.
 pub const Buf = struct {

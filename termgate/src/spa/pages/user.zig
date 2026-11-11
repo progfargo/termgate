@@ -596,7 +596,7 @@ pub fn submitTerminalInvite(f: Form) void {
     recordHeader(&b, u, .terminal, "Invitation");
     content.contentStart(&b);
     b.add("<p>Shown once. Hand it to <strong>{f}</strong>: it runs this once, within 7 days, on its own machine; tgterm makes its key there. After that \"tgterm &lt;node&gt;\" is enough.</p>", .{app.esc(u.name)});
-    b.add("<pre>{f}</pre>", .{app.esc(command)});
+    b.add("<pre class=\"wrap\">{f}</pre>", .{app.esc(command)});
     content.contentEnd(&b);
     content.commandStart(&b);
     b.add("<button type=\"button\" data-action=\"copy\" data-text=\"{f}\" class=\"button button-default button-sm\"><i class=\"fa fa-copy\"></i> Copy</button>", .{app.esc(command)});

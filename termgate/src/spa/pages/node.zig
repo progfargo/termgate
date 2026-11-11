@@ -292,10 +292,11 @@ pub fn newKeyPage(query: []const u8) void {
     var b: app.Buf = .{};
     recordHeader(&b, n, .new_key);
     content.contentStart(&b);
-    b.raw("<form><div class=\"form-group form-command\"><div class=\"button-group-fixed\">");
-    b.add("<button type=\"button\" data-action=\"nodeNewKey\" data-id=\"{d}\" class=\"button button-primary button-sm\">Submit</button> <a href=\"{s}\" class=\"button button-default button-sm\">Cancel</a></div>", .{ n.id, nodeUrl("#/node/display", n.id) });
-    b.raw("<span class=\"help-block\">A new node key replaces the one before; it is used once, on the device, within an hour.</span></div></form>");
+    b.raw("<p>Make a new node key? It replaces the one before; it is used once, on the device, within an hour.</p>");
     content.contentEnd(&b);
+    content.commandStart(&b);
+    b.add("<button type=\"button\" data-action=\"nodeNewKey\" data-id=\"{d}\" class=\"button button-primary button-sm\">Make new key</button>", .{n.id});
+    content.commandEnd(&b);
     content.show(&b);
 }
 
@@ -320,7 +321,7 @@ fn showKey(n: Node, key: Key) void {
     recordHeader(&b, n, .new_key);
     content.contentStart(&b);
     b.raw("<p>Run this once on the device, within an hour. The device then asks to be approved here.</p>");
-    b.add("<pre>{f}</pre>", .{app.esc(command)});
+    b.add("<pre class=\"wrap\">{f}</pre>", .{app.esc(command)});
     content.contentEnd(&b);
     content.commandStart(&b);
     b.add("<button type=\"button\" data-action=\"copy\" data-text=\"{f}\" class=\"button button-default button-sm\"><i class=\"fa fa-copy\"></i> Copy</button>", .{app.esc(command)});

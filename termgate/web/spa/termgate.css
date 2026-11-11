@@ -14,3 +14,10 @@ table caption {
     caption-side: bottom;
     padding: var(--u2) 0 0 0;
 }
+
+/* A long command (a node key, an invitation) wraps instead of widening
+   the page */
+pre.wrap {
+    white-space: pre-wrap;
+    word-break: break-all;
+}

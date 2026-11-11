@@ -1,6 +1,6 @@
 //! Grants: account-signed permission for one user (or bot) to open terminal
-//! sessions on the nodes matching a set of name patterns, as a given Unix user,
-//! until a time and/or a limited number of times.
+//! sessions on the nodes matching a set of name patterns, until a time
+//! and/or a limited number of times.
 //!
 //! A grant is a NATS-style JWT (see jwt.zig) whose "nats" section has
 //! type "grant". The type keeps a grant from being accepted as a user JWT and
@@ -23,8 +23,6 @@ pub const GrantNats = struct {
     kind: Kind = .human,
     /// Node name patterns the grant covers (glob: * any run, ? one character)
     nodes: []const []const u8,
-    /// Unix user the shell runs as on the node
-    run_as: []const u8,
     /// Number of sessions allowed; null = unlimited
     max_uses: ?u32 = null,
 };
@@ -53,7 +51,6 @@ pub const Spec = struct {
     name: ?[]const u8 = null,
     kind: Kind = .human,
     nodes: []const []const u8,
-    run_as: []const u8,
     max_uses: ?u32 = null,
     nbf: ?i64 = null,
     /// Expiry; a grant needs exp, max_uses or both
@@ -66,7 +63,7 @@ pub fn issue(gpa: std.mem.Allocator, signer: nkeys.KeyPair, spec: Spec, now: i64
     if (signer.prefix != .account) return error.InvalidSigner;
     const user = nkeys.PublicKey.decode(spec.user) catch return error.InvalidSpec;
     if (user.prefix != .user) return error.InvalidSpec;
-    if (spec.nodes.len == 0 or spec.run_as.len == 0) return error.InvalidSpec;
+    if (spec.nodes.len == 0) return error.InvalidSpec;
     for (spec.nodes) |p| if (!node_name.isValidPattern(p)) return error.InvalidSpec;
     if (spec.exp == null and spec.max_uses == null) return error.InvalidSpec;
     if (spec.exp) |exp| if (exp <= now) return error.InvalidSpec;
@@ -80,7 +77,6 @@ pub fn issue(gpa: std.mem.Allocator, signer: nkeys.KeyPair, spec: Spec, now: i64
         .nats = .{
             .kind = spec.kind,
             .nodes = spec.nodes,
-            .run_as = spec.run_as,
             .max_uses = spec.max_uses,
         },
     }, signer, now);
@@ -181,7 +177,6 @@ const Fixture = struct {
             .user = &self.user_pub,
             .name = "ali",
             .nodes = &.{ "gw17", "pump??", "ist_*_gw" },
-            .run_as = "root",
             .max_uses = 3,
             .exp = t0 + 3600,
         };
@@ -203,7 +198,6 @@ test "issue and verify a grant" {
     try testing.expectEqualStrings(&f.account_pub, c.iss);
     try testing.expectEqualStrings(&f.user_pub, c.sub);
     try testing.expectEqual(Kind.human, c.nats.kind);
-    try testing.expectEqualStrings("root", c.nats.run_as);
     try testing.expectEqual(@as(?u32, 3), c.nats.max_uses);
     try testing.expectEqual(@as(usize, 3), c.nats.nodes.len);
     try testing.expectEqual(@as(usize, 52), c.jti.?.len);
@@ -267,7 +261,7 @@ test "a grant claiming another type is rejected" {
     const tok = try jwt.encode(a, GrantClaims, .{
         .sub = &f.user_pub,
         .exp = t0 + 3600,
-        .nats = .{ .type = "user", .nodes = &.{"gw17"}, .run_as = "root" },
+        .nats = .{ .type = "user", .nodes = &.{"gw17"} },
     }, f.account, t0);
     defer a.free(tok);
     try testing.expectError(error.NotAGrant, verify(a, tok, f.expect("gw17")));
@@ -298,9 +292,6 @@ test "issue rejects bad input" {
     s = f.spec();
     s.nodes = &.{"ist-*"};
     try testing.expectError(error.InvalidSpec, issue(a, f.account, s, t0));
-    s = f.spec();
-    s.run_as = "";
-    try testing.expectError(error.InvalidSpec, issue(a, f.account, s, t0));
 }
 
 test "unlimited grant and bot kind round trip" {
@@ -309,7 +300,6 @@ test "unlimited grant and bot kind round trip" {
     var s = f.spec();
     s.max_uses = null;
     s.kind = .bot;
-    s.run_as = "tgbot";
     const tok = try issue(a, f.account, s, t0);
     defer a.free(tok);
     const p = try verify(a, tok, f.expect("gw17"));

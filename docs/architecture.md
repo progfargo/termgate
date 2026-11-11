@@ -8,7 +8,7 @@ termgate is a web application the customer runs on a server: the online authorit
 
 - Terminal access to devices behind NAT/CGNAT, without static IPs, even while moving. No open port on the gateway.
 - Access by invitation: time-limited (`exp`), N-use (`max_uses`), or both.
-- Per-node authorization: the invitation fixes which nodes and which Unix user.
+- Per-node authorization: the invitation fixes which nodes. A session runs as the user tgnode runs as, with that user's permissions on the device.
 - Instant revocation; active sessions are cut as well.
 - Hardware-bound node identity: a copied binary does not work on another device.
 - Live monitoring of active sessions (read-only mirror) and killing them.
@@ -65,7 +65,7 @@ A grant is a JWT in the same format as NATS JWTs, signed by termgate's issuer ke
   "sub": "U...user pub", "nbf": 1794289057, "exp": 1794292657,
   "nats": {
     "type": "grant", "version": 1, "kind": "human | bot",
-    "nodes": ["gw17", "pump??", "ist_*"], "run_as": "root | tgbot", "max_uses": 3
+    "nodes": ["gw17", "pump??", "ist_*"], "max_uses": 3
   }
 }
 ```
@@ -103,7 +103,7 @@ If termgate is not running, registration waits: tgnode retries every 5 s until t
 
 **Invitation**
 
-An invitation gives one user (a person or a bot) terminal access. The admin sets which nodes (name patterns), as which Unix user, how many sessions and/or until when; giving it again replaces what the user had. The user gets a single string:
+An invitation gives one user (a person or a bot) terminal access. The admin sets which nodes (name patterns), how many sessions and/or until when; giving it again replaces what the user had. The user gets a single string:
 
 ```
 tg1-relay.example.com:4222-<CA fingerprint>-<token>
@@ -124,7 +124,7 @@ If termgate is not running, the connection is refused ("termgate is offline"). T
 1. tgterm sends a session request to `session.open.<node>`: the grant, the node name, a timestamp and a random nonce, signed with the user key named in the grant's `sub`. NATS does not tell the receiver who published a message, so this signature is the proof that the requester holds the grant's key.
 2. tgnode verifies the grant, the signature, that the timestamp is within the 5 min leeway and that the nonce has not been used (replay cache).
 3. tgnode asks termgate for approval with a request to `authorize.<node>` (grant, nonce, session id). termgate checks revocation and `max_uses`, counts the use, records the session start and replies with an approval signed by the issuer key that echoes the nonce. No responder means termgate is offline: the session is refused.
-4. tgnode verifies the approval, opens a PTY as `run_as` and returns a `sid`.
+4. tgnode verifies the approval, opens a PTY (a shell of the user tgnode runs as) and returns a `sid`.
 5. Data flow (tgnode subscribes to `in.<node>.<user>.<sid>.*`):
    - `in.<node>.<user>.<sid>.data`: input
    - `out.<node>.<user>.<sid>.data`: output; `out.<node>.<user>.<sid>.end`: the shell has exited
@@ -161,7 +161,7 @@ If termgate is not running, the connection is refused ("termgate is offline"). T
 - Contents: tgnode version, hostname, OS, kernel, architecture, CPU count, uptime, load average, memory total/available, disk total/free for the root filesystem.
 
 **AI bot**
-- Invited with a `kind: bot` grant and runs as a restricted `run_as` user.
+- Invited with a `kind: bot` grant.
 - Connects with `tgterm --headless`.
 - Publishes a one-line status to `bot.status.<user>`.
 - Asks questions over `bot.ask.<user>` (request/reply); the answer comes from termgate.
@@ -252,7 +252,7 @@ Each binary builds on its own with its own `build.zig` and `build.zig.zon`, and 
   - The superuser is the first user, named `superuser` (`termgate init`): every right. Nobody can change it, block it, delete it, give it a new password, or give or take its roles; it changes its own password in its profile.
   - The role `admin` cannot be deleted, and only the superuser changes it. The last user with the role `admin` cannot be deleted or lose the role.
   - Acting as another user (users.select): a user with the right sees and uses the panel as another user does, with that user's rights, until it goes back (users.unselect); both are checked against its own rights, and only the superuser may act as the superuser. The audit names both ("erdem as veli"). Used to test what a role allows.
-- One kind of user: admins, auditors, terminal users and bots are all users (table `user`), and what each may do comes from its roles. A user's terminal access (table `terminal`: nodes, Unix user, limits, its tgterm key) is given on the Users page; the relay lets a user connect only while it is not blocked, its access is not revoked and a role gives it terminal:connect. Taking that away closes its open connections.
+- One kind of user: admins, auditors, terminal users and bots are all users (table `user`), and what each may do comes from its roles. A user's terminal access (table `terminal`: nodes, limits, its tgterm key) is given on the Users page; the relay lets a user connect only while it is not blocked, its access is not revoked and a role gives it terminal:connect. Taking that away closes its open connections.
 - Menus: on the left Nodes, Sessions, Audit, and Admin with User Management (Users, Roles) and Configuration, then the signed-in user and the logo; at the top Profile, Help, Logout and the theme switch.
 - Signing in: user name and password, then a 6-digit code from an authenticator app (TOTP, RFC 6238, as in Google Authenticator). The second step is set up at the user's first sign-in: the panel shows a new secret, as a QR code to scan (drawn by the server, nayuki's qrcodegen) and as text to type, and the first code confirms it. A debug build (local use, the tests) has no second step; a release build, the one for a server, always has it. A code is accepted once. Wrong passwords and codes count together: from the fifth in a row the user is locked for 1, 2, 4 ... minutes, at most an hour. An unknown name and a wrong password get the same answer after the same work. While the password is checked the form is disabled and its button shows a spinning wheel.
 - Passwords are stored as Argon2id hashes (19 MiB, 2 passes, OWASP's recommendation; a hash made with other parameters is made again at the next sign-in), TOTP secrets encrypted with the log key. A browser session is a random token in an HttpOnly, Secure, SameSite=Strict cookie; the server stores only its hash. It lasts 12 hours; a new password or disabling the user ends its sessions.

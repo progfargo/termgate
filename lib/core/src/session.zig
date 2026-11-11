@@ -215,7 +215,6 @@ const Fixture = struct {
         f.token = try grant.issue(a, account, .{
             .user = &f.user_pub,
             .nodes = &.{"gw17"},
-            .run_as = "root",
             .exp = t0 + 3600,
         }, t0);
         return f;

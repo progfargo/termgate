@@ -9,7 +9,7 @@
 //!   session.open.<node>  request from tgterm, verified (grant, signature,
 //!                        freshness, replay)
 //!   authorize.<node>     request to termgate; its signed approval must match
-//!   PTY as run_as        reply {"sid": ..., "approval": ...} to tgterm
+//!   PTY                  reply {"sid": ..., "approval": ...} to tgterm
 //!
 //! Session data is end-to-end encrypted (core e2e.zig): tgterm's session
 //! public key comes in the signed request, this node's goes to termgate in
@@ -276,7 +276,7 @@ pub const Agent = struct {
         // termgate answered: it is there
         a.cut.store(false, .release);
         // Open the shell and hand the session to its own task
-        const s = try Session.create(a, g.sub, g.jti orelse "", &sid, g.nats.run_as, keys);
+        const s = try Session.create(a, g.sub, g.jti orelse "", &sid, keys);
         errdefer {
             s.shell.hangup();
             _ = s.shell.wait();
@@ -292,7 +292,7 @@ pub const Agent = struct {
         try a.conn.flush(Conn.seconds(5));
         try a.sessions.concurrent(a.io, Session.run, .{s});
         try a.conn.publish(reply, ok);
-        log.info("session {s} opened for {s} as {s}", .{ &sid, g.sub, g.nats.run_as });
+        log.info("session {s} opened for {s}", .{ &sid, g.sub });
     }
 };
 
@@ -314,11 +314,11 @@ const Session = struct {
     output_lock: Io.Mutex = .init,
     done: std.atomic.Value(bool) = .init(false),
 
-    fn create(a: *Agent, user: []const u8, grant_jti: []const u8, sid: *const [22]u8, run_as: []const u8, keys: core.e2e.Keys) !*Session {
+    fn create(a: *Agent, user: []const u8, grant_jti: []const u8, sid: *const [22]u8, keys: core.e2e.Keys) !*Session {
         const gpa = a.gpa;
         const s = try gpa.create(Session);
         errdefer gpa.destroy(s);
-        const shell = try pty.spawn(gpa, .{ .run_as = run_as });
+        const shell = try pty.spawn(gpa, .{});
         errdefer {
             shell.hangup();
             _ = shell.wait();

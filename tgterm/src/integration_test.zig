@@ -24,7 +24,7 @@ test "an invitation gives a key, a grant and user permissions; it works once" {
     const fp = try core.code.caFingerprint(a, test_ca);
     const invitation = try core.code.format(a, "127.0.0.1", tg.port, fp, @splat(0x61));
     defer a.free(invitation);
-    t.expectInvitation((try core.code.parse(invitation)).token, .{ .user = "", .nodes = &.{"ist_*"}, .run_as = "root", .max_uses = 3 });
+    t.expectInvitation((try core.code.parse(invitation)).token, .{ .user = "", .nodes = &.{"ist_*"}, .max_uses = 3 });
 
     var arena: std.heap.ArenaAllocator = .init(a);
     defer arena.deinit();
@@ -63,7 +63,7 @@ test "an invitation for a different relay CA sends no token" {
     defer t.stop();
     const invitation = try core.code.format(a, "127.0.0.1", tg.port, @splat(7), @splat(0x62));
     defer a.free(invitation);
-    t.expectInvitation((try core.code.parse(invitation)).token, .{ .user = "", .nodes = &.{"*"}, .run_as = "root", .max_uses = 1 });
+    t.expectInvitation((try core.code.parse(invitation)).token, .{ .user = "", .nodes = &.{"*"}, .max_uses = 1 });
     var arena: std.heap.ArenaAllocator = .init(a);
     defer arena.deinit();
     try testing.expectError(error.WrongCa, invite.redeem(a, arena.allocator(), io, invitation));

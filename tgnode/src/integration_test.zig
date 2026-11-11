@@ -19,17 +19,6 @@ fn now(io: Io) i64 {
     return @intCast(@divFloor(Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_s));
 }
 
-fn currentUser(buf: []u8) ![]const u8 {
-    var pw: c.struct_passwd = undefined;
-    var result: ?*c.struct_passwd = null;
-    var tmp: [4096]u8 = undefined;
-    if (c.getpwuid_r(c.getuid(), &pw, &tmp, tmp.len, @ptrCast(&result)) != 0 or result == null)
-        return error.SkipZigTest;
-    const n = std.mem.span(pw.pw_name);
-    @memcpy(buf[0..n.len], n);
-    return buf[0..n.len];
-}
-
 fn startAgent(a: std.mem.Allocator, io: Io, t: *Termgate, name: []const u8, node_key: KeyPair) !*agent_mod.Agent {
     var root = try Io.Dir.openDirAbsolute(io, "/", .{});
     errdefer root.close(io);
@@ -60,8 +49,6 @@ fn connectUser(a: std.mem.Allocator, io: Io, user: KeyPair, inbox_buf: []u8) !*C
 test "a session end to end: open, type, read output, exit, audit" {
     const a = testing.allocator;
     const io = testing.io;
-    var name_buf: [64]u8 = undefined;
-    const me = try currentUser(&name_buf);
     const t = try Termgate.start(a, io, test_ca);
     defer t.stop();
 
@@ -94,7 +81,7 @@ test "a session end to end: open, type, read output, exit, audit" {
     var inbox_buf: [80]u8 = undefined;
     const client = try connectUser(a, io, user, &inbox_buf);
     defer client.close();
-    const grant_tok = try core.grant.issue(a, t.issuer, .{ .user = &upub, .nodes = &.{"e2e_*"}, .run_as = me, .max_uses = 3 }, now(io));
+    const grant_tok = try core.grant.issue(a, t.issuer, .{ .user = &upub, .nodes = &.{"e2e_*"}, .max_uses = 3 }, now(io));
     defer a.free(grant_tok);
 
     // tgterm's side of the key agreement
@@ -186,8 +173,6 @@ test "a session end to end: open, type, read output, exit, audit" {
 test "termgate gone: open sessions are ended after the grace time" {
     const a = testing.allocator;
     const io = testing.io;
-    var name_buf: [64]u8 = undefined;
-    const me = try currentUser(&name_buf);
     const t = try Termgate.start(a, io, test_ca);
     defer t.stop();
     const node_key = try KeyPair.fromRawSeed(.user, @splat(24));
@@ -207,7 +192,7 @@ test "termgate gone: open sessions are ended after the grace time" {
     var inbox_buf: [80]u8 = undefined;
     const client = try connectUser(a, io, user, &inbox_buf);
     defer client.close();
-    const grant_tok = try core.grant.issue(a, t.issuer, .{ .user = &upub, .nodes = &.{"e2e_*"}, .run_as = me, .max_uses = 1 }, now(io));
+    const grant_tok = try core.grant.issue(a, t.issuer, .{ .user = &upub, .nodes = &.{"e2e_*"}, .max_uses = 1 }, now(io));
     defer a.free(grant_tok);
     const eph = core.e2e.Ephemeral.generate(io);
     const user_kx = eph.publicText();
@@ -251,8 +236,6 @@ test "termgate gone: open sessions are ended after the grace time" {
 test "termgate not answering approvals: the session is refused" {
     const a = testing.allocator;
     const io = testing.io;
-    var name_buf: [64]u8 = undefined;
-    const me = try currentUser(&name_buf);
     const t = try Termgate.start(a, io, test_ca);
     defer t.stop();
     t.serve_authorize = false;
@@ -272,7 +255,7 @@ test "termgate not answering approvals: the session is refused" {
     var inbox_buf: [80]u8 = undefined;
     const client = try connectUser(a, io, user, &inbox_buf);
     defer client.close();
-    const grant_tok = try core.grant.issue(a, t.issuer, .{ .user = &upub, .nodes = &.{"e2e_*"}, .run_as = me, .max_uses = 1 }, now(io));
+    const grant_tok = try core.grant.issue(a, t.issuer, .{ .user = &upub, .nodes = &.{"e2e_*"}, .max_uses = 1 }, now(io));
     defer a.free(grant_tok);
     const kx = core.e2e.Ephemeral.generate(io).publicText();
     const created = try core.session.create(a, io, user, grant_tok, "e2e_lonely", &kx, now(io));

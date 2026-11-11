@@ -26,7 +26,6 @@ const Terminal = struct {
     kind: []const u8 = "human",
     user_key: ?[]const u8 = null,
     nodes: []const u8 = "",
-    run_as: []const u8 = "",
     max_uses: ?i64 = null,
     grant_exp: ?i64 = null,
     revoked: bool = false,
@@ -521,7 +520,7 @@ pub fn terminal(query: []const u8) void {
     renderTerminal(.{});
 }
 
-const Invite = struct { nodes: []const u8 = "", run_as: []const u8 = "", bot: bool = false, uses: []const u8 = "", days: []const u8 = "" };
+const Invite = struct { nodes: []const u8 = "", bot: bool = false, uses: []const u8 = "", days: []const u8 = "" };
 
 fn renderTerminal(form: Invite) void {
     const u = userById(edit_id) orelse return;
@@ -532,7 +531,7 @@ fn renderTerminal(form: Invite) void {
     if (u.terminal) |t| {
         b.raw("<table><tbody><tr><th class=\"fixed-middle\">State:</th><td>");
         terminalLabel(&b, t);
-        b.add("</td></tr><tr><th>Nodes:</th><td>{f}</td></tr><tr><th>As Unix user:</th><td>{f}</td></tr>", .{ app.esc(t.nodes), app.esc(t.run_as) });
+        b.add("</td></tr><tr><th>Nodes:</th><td>{f}</td></tr>", .{app.esc(t.nodes)});
         b.add("<tr><th>Sessions:</th><td>{d} used", .{t.uses orelse 0});
         if (t.max_uses) |m| b.add(" of {d}", .{m});
         b.raw("</td></tr>");
@@ -551,7 +550,6 @@ fn renderTerminal(form: Invite) void {
     content.contentStart(&b);
     b.raw("<form>");
     content.field(&b, "term-nodes-input", "Nodes:", form.nodes, .{ .required = true, .max = 255, .help = "Node names or patterns, comma separated: ist_*, pump?? (* any, ? one character)." });
-    content.field(&b, "term-runas-input", "As Unix user:", form.run_as, .{ .required = true, .max = 32, .help = "The account on the node the session runs as." });
     content.field(&b, "term-uses-input", "Sessions:", form.uses, .{ .max = 6, .help = "How many sessions; empty: no limit (then give days)." });
     content.field(&b, "term-days-input", "Days:", form.days, .{ .max = 4, .help = "Valid for this many days; empty: no end (then give sessions)." });
     content.checkbox(&b, "term-bot-input", "A bot (a program)", form.bot);
@@ -562,7 +560,7 @@ fn renderTerminal(form: Invite) void {
 }
 
 pub fn submitTerminalInvite(f: Form) void {
-    const form: Invite = .{ .nodes = f.trimmed("term-nodes-input"), .run_as = f.trimmed("term-runas-input"), .bot = f.checked("term-bot-input"), .uses = f.trimmed("term-uses-input"), .days = f.trimmed("term-days-input") };
+    const form: Invite = .{ .nodes = f.trimmed("term-nodes-input"), .bot = f.checked("term-bot-input"), .uses = f.trimmed("term-uses-input"), .days = f.trimmed("term-days-input") };
     const number = struct {
         fn get(text: []const u8) error{Invalid}!?u32 {
             if (text.len == 0) return null;
@@ -584,7 +582,7 @@ pub fn submitTerminalInvite(f: Form) void {
         const t = std.mem.trim(u8, p, " ");
         if (t.len > 0) nodes.append(app.arena(), t) catch {};
     }
-    const answer = fetch.post("user/terminal_invite", .{ .id = edit_id, .nodes = nodes.items, .run_as = form.run_as, .bot = form.bot, .uses = uses, .days = days }) orelse return;
+    const answer = fetch.post("user/terminal_invite", .{ .id = edit_id, .nodes = nodes.items, .bot = form.bot, .uses = uses, .days = days }) orelse return;
     if (fetch.refused()) {
         state.keepMessages();
         return renderTerminal(form);

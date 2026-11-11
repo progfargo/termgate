@@ -30,7 +30,6 @@ pub const Terminal = struct {
     user_key: ?[]const u8,
     /// Node name patterns, comma separated
     nodes: []const u8,
-    run_as: []const u8,
     max_uses: ?i64,
     grant_exp: ?i64,
     revoked: bool,
@@ -166,7 +165,6 @@ pub const TerminalSpec = struct {
     kind: core.grant.Kind = .human,
     /// Node name patterns, comma separated ("ist_*,pump??")
     nodes: []const u8,
-    run_as: []const u8,
     max_uses: ?u32 = null,
     /// When the grant ends; a grant needs this, max_uses or both
     grant_exp: ?i64 = null,

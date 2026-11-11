@@ -186,7 +186,6 @@ pub const Db = struct {
             \\    tokenHash TEXT UNIQUE,
             \\    tokenExpires INTEGER,
             \\    nodes TEXT NOT NULL,
-            \\    runAs TEXT NOT NULL,
             \\    maxUses INTEGER,
             \\    grantExp INTEGER,
             \\    revoked INTEGER NOT NULL DEFAULT 0,
@@ -1128,7 +1127,6 @@ pub const Db = struct {
     /// this token hash, usable until `token_expires`. Access the user had
     /// before (its key, its grants) ends.
     pub fn terminalInvite(db: *Db, user_id: i64, spec: TerminalSpec, token_hash: []const u8, token_expires: i64, now: i64) TerminalError!void {
-        if (spec.run_as.len == 0) return error.InvalidSpec;
         if (spec.max_uses == null and spec.grant_exp == null) return error.InvalidSpec;
         if (spec.max_uses) |m| if (m == 0) return error.InvalidSpec;
         var it = std.mem.splitScalar(u8, spec.nodes, ',');
@@ -1145,8 +1143,8 @@ pub const Db = struct {
         }
         {
             var st = try Stmt.prepare(db,
-                \\insert or replace into terminal(userId, kind, userKey, tokenHash, tokenExpires, nodes, runAs, maxUses, grantExp, revoked, created)
-                \\values(?, ?, null, ?, ?, ?, ?, ?, ?, 0, ?)
+                \\insert or replace into terminal(userId, kind, userKey, tokenHash, tokenExpires, nodes, maxUses, grantExp, revoked, created)
+                \\values(?, ?, null, ?, ?, ?, ?, ?, 0, ?)
             );
             defer st.finalize();
             try st.bindInt(1, user_id);
@@ -1154,10 +1152,9 @@ pub const Db = struct {
             try st.bindText(3, token_hash);
             try st.bindInt(4, token_expires);
             try st.bindText(5, spec.nodes);
-            try st.bindText(6, spec.run_as);
-            try st.bindOptInt(7, if (spec.max_uses) |m| m else null);
-            try st.bindOptInt(8, spec.grant_exp);
-            try st.bindInt(9, now);
+            try st.bindOptInt(6, if (spec.max_uses) |m| m else null);
+            try st.bindOptInt(7, spec.grant_exp);
+            try st.bindInt(8, now);
             st.done() catch |e| return db.mapUnique(e);
         }
         try db.commit();
@@ -1457,7 +1454,7 @@ pub const Db = struct {
     }
 
     const session_select = "select sid, node, userKey, userName, grantJti, started, ended, exitStatus from session";
-    const terminal_select = "select t.userId, u.name, t.kind, t.userKey, t.nodes, t.runAs, t.maxUses, t.grantExp, t.revoked, t.created, t.tokenExpires, " ++
+    const terminal_select = "select t.userId, u.name, t.kind, t.userKey, t.nodes, t.maxUses, t.grantExp, t.revoked, t.created, t.tokenExpires, " ++
         "(select uses from grantRecord g where g.userId = t.userId order by g.rowid desc limit 1) from terminal t join user u on u.userId = t.userId";
 
     const node_select = "select nodeId, name, description, state, hardwareKey, requestKey, status, created, lastSeen, tokenExpires, online from node";
@@ -1548,13 +1545,12 @@ const Stmt = struct {
             .kind = std.meta.stringToEnum(core.grant.Kind, st.rawText(2)) orelse return error.SqliteError,
             .user_key = try st.optText(a, 3),
             .nodes = try st.text(a, 4),
-            .run_as = try st.text(a, 5),
-            .max_uses = st.optInt(6),
-            .grant_exp = st.optInt(7),
-            .revoked = st.int(8) != 0,
-            .created = st.int(9),
-            .token_expires = st.optInt(10),
-            .uses = st.optInt(11),
+            .max_uses = st.optInt(5),
+            .grant_exp = st.optInt(6),
+            .revoked = st.int(7) != 0,
+            .created = st.int(8),
+            .token_expires = st.optInt(9),
+            .uses = st.optInt(10),
         };
     }
 
@@ -1714,7 +1710,7 @@ test "terminal access: invitation, redemption, grant uses and sessions" {
 
     const th = tokenHash("INV");
     const id = try testTerminalUser(&db, "ali");
-    try db.terminalInvite(id, .{ .nodes = "ist_*,pump??", .run_as = "root", .max_uses = 2 }, &th, t0 + 3600, t0);
+    try db.terminalInvite(id, .{ .nodes = "ist_*,pump??", .max_uses = 2 }, &th, t0 + 3600, t0);
     const p = (try db.terminalByToken(a, &th, t0)).?;
     try testing.expectEqualStrings("ali", p.name);
     const tid = core.code.tokenId("INV");
@@ -1760,7 +1756,7 @@ test "terminal access: expiry, revocation, and the right to connect" {
 
     const th = tokenHash("INV2");
     const id = try testTerminalUser(&db, "bot1");
-    try db.terminalInvite(id, .{ .kind = .bot, .nodes = "*", .run_as = "tgbot", .grant_exp = t0 + 60 }, &th, t0 + 10, t0);
+    try db.terminalInvite(id, .{ .kind = .bot, .nodes = "*", .grant_exp = t0 + 60 }, &th, t0 + 10, t0);
     // An invitation that is not used in time expires
     try testing.expect((try db.terminalByToken(a, &th, t0 + 10)) == null);
     try db.terminalRedeem(id, "UBOT", "JTIB", "x", null, t0 + 60);
@@ -1782,7 +1778,7 @@ test "terminal access: expiry, revocation, and the right to connect" {
     try testing.expect((try db.terminalByKey(a, "UBOT")) == null);
     try testing.expectEqualStrings("access revoked", (try db.grantUse("JTIB", "gw1", "B3", "UBOT", t0)).denied);
     // A new invitation gives access again, with a new key
-    try db.terminalInvite(id, .{ .nodes = "*", .run_as = "tgbot", .max_uses = 1 }, &tokenHash("INV3"), t0 + 10, t0);
+    try db.terminalInvite(id, .{ .nodes = "*", .max_uses = 1 }, &tokenHash("INV3"), t0 + 10, t0);
     try testing.expect((try db.terminalByToken(a, &tokenHash("INV3"), t0)) != null);
 }
 
@@ -1791,10 +1787,9 @@ test "terminal access needs valid patterns and a limit" {
     defer db.close();
     const th = tokenHash("X");
     const id = try testTerminalUser(&db, "xx");
-    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{ .nodes = "ist-*", .run_as = "root", .max_uses = 1 }, &th, t0 + 1, t0));
-    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{ .nodes = "ist_*", .run_as = "root" }, &th, t0 + 1, t0));
-    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{ .nodes = "ist_*", .run_as = "", .max_uses = 1 }, &th, t0 + 1, t0));
-    try testing.expectError(error.NotFound, db.terminalInvite(999, .{ .nodes = "ist_*", .run_as = "root", .max_uses = 1 }, &th, t0 + 1, t0));
+    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{ .nodes = "ist-*", .max_uses = 1 }, &th, t0 + 1, t0));
+    try testing.expectError(error.InvalidSpec, db.terminalInvite(id, .{ .nodes = "ist_*" }, &th, t0 + 1, t0));
+    try testing.expectError(error.NotFound, db.terminalInvite(999, .{ .nodes = "ist_*", .max_uses = 1 }, &th, t0 + 1, t0));
 }
 
 test "settings and session logs" {

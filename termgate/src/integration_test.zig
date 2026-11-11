@@ -139,7 +139,7 @@ fn addSession(f: *Fixture, comptime tag: []const u8, node: []const u8, user: []c
     defer f.lock.unlock(testing.io);
     const th = dbm.tokenHash("tok-" ++ tag);
     const uid = try terminalUser(&f.db, "u-" ++ tag);
-    try f.db.terminalInvite(uid, .{ .nodes = "*", .run_as = "root", .max_uses = 5 }, &th, now() + 60, now());
+    try f.db.terminalInvite(uid, .{ .nodes = "*", .max_uses = 5 }, &th, now() + 60, now());
     try f.db.terminalRedeem(uid, user, "JTI-" ++ tag, "<grant>", 5, null);
     _ = try f.db.grantUse("JTI-" ++ tag, node, sid, user, started);
     try f.db.sessionSetKeys(sid, keys);
@@ -390,7 +390,7 @@ test "registration, status, invitation, approvals with max_uses, audit" {
     {
         f.lock.lockUncancelable(testing.io);
         defer f.lock.unlock(testing.io);
-        try f.db.terminalInvite(try terminalUser(&f.db, "ali"), .{ .nodes = "box*", .run_as = "root", .max_uses = 1 }, &inv_th, now() + 3600, now());
+        try f.db.terminalInvite(try terminalUser(&f.db, "ali"), .{ .nodes = "box*", .max_uses = 1 }, &inv_th, now() + 3600, now());
     }
     const ali = try KeyPair.fromRawSeed(.user, @splat(0x74));
     const ali_pub = ali.publicKey().encode();
@@ -499,7 +499,7 @@ test "strangers get only the CA; revoked access closes the connection" {
         f.lock.lockUncancelable(testing.io);
         defer f.lock.unlock(testing.io);
         const id = try terminalUser(&f.db, "bob");
-        try f.db.terminalInvite(id, .{ .nodes = "*", .run_as = "root", .max_uses = 1 }, &th, now() + 60, now());
+        try f.db.terminalInvite(id, .{ .nodes = "*", .max_uses = 1 }, &th, now() + 60, now());
         try f.db.terminalRedeem(id, &bob.publicKey().encode(), "JTIBOB", "x", 1, null);
     }
     const ok = try f.connect(bob, null, &inbox);
@@ -511,7 +511,6 @@ test "strangers get only the CA; revoked access closes the connection" {
         defer {
             a.free(p.name);
             a.free(p.nodes);
-            a.free(p.run_as);
             a.free(p.user_key.?);
         }
         try f.db.terminalRevoke(p.id);

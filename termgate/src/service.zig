@@ -688,7 +688,6 @@ pub const Service = struct {
             .name = p.name,
             .kind = p.kind,
             .nodes = patterns.items,
-            .run_as = p.run_as,
             .max_uses = max_uses,
             .exp = p.grant_exp,
         }, s.now());

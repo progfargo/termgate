@@ -144,7 +144,6 @@
     await go("#/user/terminal?userId=" + veli);
     await wait("the terminal page", () => $("#term-nodes-input"));
     fill("term-nodes-input", "web_*");
-    fill("term-runas-input", "root");
     fill("term-uses-input", "2");
     await click("[data-action=userTerminalInvite]");
     await wait("the invitation", () => text("pre").startsWith("tgterm --invite tg1-"));

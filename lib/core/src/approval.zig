@@ -269,7 +269,7 @@ test "a grant is not an approval" {
     const grant = @import("grant.zig");
     const user = try nkeys.KeyPair.fromRawSeed(.user, @splat(2));
     const upub = user.publicKey().encode();
-    const g = try grant.issue(a, f.account, .{ .user = &upub, .nodes = &.{"gw17"}, .run_as = "root", .exp = t0 + 60 }, t0);
+    const g = try grant.issue(a, f.account, .{ .user = &upub, .nodes = &.{"gw17"}, .exp = t0 + 60 }, t0);
     defer a.free(g);
     try testing.expectError(error.InvalidToken, verify(a, g, expectFor(&.{&f.account_pub}, test_req)));
 }

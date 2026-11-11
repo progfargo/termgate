@@ -40,8 +40,6 @@ pub const modules = [_]Module{
         update,
         .{ .name = "update_pass", .title = "Reset password" },
         delete,
-        .{ .name = "select", .title = "Act as another user" },
-        .{ .name = "unselect", .title = "Stop acting as another user" },
         .{ .name = "role_browse", .title = "See roles" },
         .{ .name = "role_grant", .title = "Give roles" },
         .{ .name = "role_revoke", .title = "Take roles" },

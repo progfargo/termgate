@@ -21,10 +21,10 @@
 //!   give or take its roles. It changes its own password in its profile.
 //! - The role admin cannot be deleted; only the superuser changes it.
 //! - The last user with the role admin cannot be deleted, nor lose it.
-//! - `users.select` lets a user act as another (to see the panel as that
-//!   user does): the other's rights apply until `users.unselect`. Both
-//!   are checked against the signed-in user's own rights. Only the
-//!   superuser may act as the superuser.
+//! - `users.select` lets the superuser act as another user (to see the
+//!   panel as that user does): the other's rights apply until
+//!   `users.unselect`. Only the superuser may do it; it is no right a
+//!   role gives.
 
 const std = @import("std");
 const Io = std.Io;
@@ -80,6 +80,12 @@ pub const Caller = struct {
     pub fn realCan(c: *const Caller, module: []const u8, action: []const u8) bool {
         const r = c.real orelse return c.can(module, action);
         return r.is_superuser or dbm.rights.has(r.rights, module, action);
+    }
+
+    /// Whether the signed-in user itself (not the one it acts as) is the
+    /// superuser.
+    pub fn realIsSuperuser(c: *const Caller) bool {
+        return if (c.real) |r| r.is_superuser else c.is_superuser;
     }
 
     /// The signed-in user's own id.
@@ -147,8 +153,8 @@ pub fn call(auth: *Auth, a: std.mem.Allocator, name: []const u8, body: []const u
             .superuser = c.is_superuser,
             .rights = c.rights,
             .real = if (c.real) |r| r.name else null,
-            .can_select = c.realCan("user", "select"),
-            .can_unselect = c.realCan("user", "unselect"),
+            .can_select = c.realIsSuperuser(),
+            .can_unselect = c.real != null,
         }) };
     }
     if (std.mem.eql(u8, name, "profile.password")) {
@@ -329,16 +335,14 @@ fn userCall(auth: *Auth, a: std.mem.Allocator, name: []const u8, body: []const u
         return .{ .body = try json(a, .{ .ok = true, .id = id, .name = req.name, .password = @as([]const u8, &password) }) };
     }
     if (std.mem.eql(u8, name, "select")) {
-        if (!c.realCan("user", "select")) return fail(a, .forbidden, no_right);
+        if (!c.realIsSuperuser()) return fail(a, .forbidden, "only the superuser may act as another user");
         const target = (try db.userGet(a, req.id)) orelse return fail(a, .not_found, "no such user");
         if (target.disabled) return fail(a, .conflict, "this user is blocked");
-        if (target.is_superuser and !(if (c.real) |r| r.is_superuser else c.is_superuser)) return fail(a, .forbidden, "only the superuser may act as the superuser");
         try db.webSessionSetEffective(token_hash, if (target.id == c.realId()) null else target.id);
         return .{ .body = "{\"ok\":true}" };
     }
     if (std.mem.eql(u8, name, "unselect")) {
         if (c.real == null) return fail(a, .conflict, "you are not acting as another user");
-        if (!c.realCan("user", "unselect")) return fail(a, .forbidden, no_right);
         try db.webSessionSetEffective(token_hash, null);
         return .{ .body = "{\"ok\":true}" };
     }
@@ -665,17 +669,18 @@ test "sign in with two steps; users, roles and rights" {
     try testing.expectEqual(@as(usize, 3), (try db.roleRights(a, editor)).len);
     // Acting as another user: veli's rights apply, the audit names both
     const vid = try std.fmt.allocPrint(a, "{{\"id\":{d}}}", .{veli});
-    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.select", "{\"id\":1}", et, now)).?.status);
+    // Only the superuser, not an admin
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.select", vid, et, now)).?.status);
     try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.select", vid, vt, now)).?.status);
-    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.select", vid, et, now)).?.status);
-    const as_veli = (try call(&auth, a, "me", "{}", et, now)).?.body;
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.select", vid, token, now)).?.status);
+    const as_veli = (try call(&auth, a, "me", "{}", token, now)).?.body;
     try testing.expectEqualStrings("veli", field(a, as_veli, "name"));
-    try testing.expectEqualStrings("erdem", field(a, as_veli, "real"));
-    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.list", "{}", et, now)).?.status);
-    try testing.expectEqualStrings("erdem as veli", (try caller(&auth, a, et, now)).?.auditName(a));
-    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.unselect", "{}", et, now)).?.status);
-    try testing.expectEqualStrings("erdem", field(a, (try call(&auth, a, "me", "{}", et, now)).?.body, "name"));
-    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.unselect", "{}", et, now)).?.status);
+    try testing.expectEqualStrings("superuser", field(a, as_veli, "real"));
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.list", "{}", token, now)).?.status);
+    try testing.expectEqualStrings("superuser as veli", (try caller(&auth, a, token, now)).?.auditName(a));
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.unselect", "{}", token, now)).?.status);
+    try testing.expectEqualStrings("superuser", field(a, (try call(&auth, a, "me", "{}", token, now)).?.body, "name"));
+    try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "users.unselect", "{}", token, now)).?.status);
     // Changing one's own password needs the current one
     try testing.expectEqual(std.http.Status.conflict, (try call(&auth, a, "profile.password", "{\"current\":\"wrong\",\"new\":\"izmir3535\",\"new2\":\"izmir3535\"}", et, now)).?.status);
     try testing.expectEqual(std.http.Status.bad_request, (try call(&auth, a, "profile.password", "{\"current\":\"ankara12\",\"new\":\"short\",\"new2\":\"short\"}", et, now)).?.status);

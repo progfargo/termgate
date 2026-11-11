@@ -215,7 +215,7 @@ pub fn browse(query: []const u8) void {
     content.commandEnd(&b);
 
     content.contentStart(&b);
-    b.raw("<table><thead><tr><th>Name</th><th class=\"center\">Status</th><th>Roles</th><th class=\"center\">Terminal</th>");
+    b.raw("<table><thead><tr><th>Name</th><th class=\"center\">Status</th><th>Roles</th><th class=\"center\">Access Key</th>");
     if (has_command) b.raw("<th class=\"right\">Command</th>");
     b.raw("</tr></thead><tbody>");
     var shown: usize = 0;
@@ -310,7 +310,7 @@ pub fn display(query: []const u8) void {
     b.raw("</td></tr><tr><th>Roles:</th><td>");
     if (u.superuser) content.label(&b, "primary", "superuser");
     for (u.roles, 0..) |r, i| b.add("{s}{f}", .{ if (i > 0 or u.superuser) ", " else " ", app.esc(r.name) });
-    b.add("</td></tr><tr><th>Nodes:</th><td>{f}</td></tr><tr><th>Terminal:</th><td>", .{app.esc(if (u.nodes.len > 0) u.nodes else "-")});
+    b.add("</td></tr><tr><th>Nodes:</th><td>{f}</td></tr><tr><th>Access Key:</th><td>", .{app.esc(if (u.nodes.len > 0) u.nodes else "-")});
     terminalLabel(&b, u.terminal);
     b.add("</td></tr><tr><th>Added:</th><td>{s}</td></tr></tbody></table>", .{content.dateTime(u.created)});
     content.contentEnd(&b);

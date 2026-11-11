@@ -38,7 +38,8 @@ fn table(b: *app.Buf, sessions: []const Session, key: []const u8, open_count: us
     b.raw("<thead><tr><th>Node</th><th>User</th><th class=\"center\">Status</th><th>Started</th><th>Ended</th><th class=\"right\">Command</th></tr></thead><tbody>");
     if (sessions.len == 0) b.raw("<tr><td colspan=\"6\">Empty list.</td></tr>");
     for (sessions) |s| {
-        const open = s.ended == null;
+        // Open now: termgate knows it (not the record)
+        const open = s.open;
         b.raw("<tr><td>");
         content.find(b, s.node, key);
         b.raw("</td><td>");

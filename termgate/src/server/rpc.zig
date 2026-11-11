@@ -38,10 +38,7 @@ const db_calls = [_]DbCall{
     .{ .name = "nodeGet", .module = "node", .action = "browse" },
     .{ .name = "nodeSearch", .module = "node", .action = "browse" },
     .{ .name = "nodeSummary", .module = "node", .action = "browse" },
-    .{ .name = "sessionsSearch", .module = "session", .action = "browse" },
     .{ .name = "actionsSearch", .module = "audit", .action = "browse" },
-    .{ .name = "sessionsActive", .module = "session", .action = "browse" },
-    .{ .name = "sessionsOfNode", .module = "session", .action = "browse" },
     .{ .name = "settingsGet", .module = "config", .action = "browse" },
     .{ .name = "nodeApprove", .module = "node", .action = "update", .changes = true },
     .{ .name = "nodeReject", .module = "node", .action = "update", .changes = true },
@@ -166,7 +163,6 @@ test "database calls by name, with the right checked" {
     // Without a role: nothing, not even reading
     try testing.expectEqual(Result.forbidden, (try call(&rpc, a, "db.nodeSearch", "[\"\",1]", nobody)).?);
     try testing.expectEqual(Result.forbidden, (try call(&rpc, a, "log.commands", "[\"S1\"]", nobody)).?);
-    try testing.expectEqual(Result.forbidden, (try call(&rpc, a, "db.sessionsActive", "[]", auditor)).?);
 
     // Wrong arguments, and functions that are not listed
     try testing.expectEqual(Result.bad_request, (try call(&rpc, a, "db.nodeGet", "[]", admin)).?);

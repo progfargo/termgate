@@ -224,8 +224,8 @@ pub const Db = struct {
             \\    node TEXT NOT NULL,
             \\    userKey TEXT NOT NULL,
             \\    userName TEXT NOT NULL,
-            \\    started INTEGER NOT NULL,
-            \\    ended INTEGER,
+            \\    sessionStart INTEGER NOT NULL,
+            \\    sessionEnd INTEGER,
             \\    exitStatus INTEGER,
             \\    keys BLOB
             \\)
@@ -1275,7 +1275,7 @@ pub const Db = struct {
             try up.done();
         }
         {
-            var ins = try Stmt.prepare(db, "insert into session(sid, node, userKey, userName, started) values(?, ?, ?, ?, ?)");
+            var ins = try Stmt.prepare(db, "insert into session(sid, node, userKey, userName, sessionStart) values(?, ?, ?, ?, ?)");
             defer ins.finalize();
             try ins.bindText(1, sid);
             try ins.bindText(2, node);
@@ -1292,7 +1292,7 @@ pub const Db = struct {
     /// The node reported the end of a session (audit.<node>). Repeated reports
     /// (retries) change nothing.
     pub fn sessionEnd(db: *Db, sid: []const u8, at: i64, exit_status: i64) Error!void {
-        var st = try Stmt.prepare(db, "update session set ended = ?, exitStatus = ? where sid = ? and ended is null");
+        var st = try Stmt.prepare(db, "update session set sessionEnd = ?, exitStatus = ? where sid = ? and sessionEnd is null");
         defer st.finalize();
         try st.bindInt(1, at);
         try st.bindInt(2, exit_status);
@@ -1300,21 +1300,21 @@ pub const Db = struct {
         try st.done();
     }
 
-    /// Marks every open session on `node` ended (the node was cut off and
-    /// cannot report them); exit status unknown.
-    pub fn sessionsEndNode(db: *Db, node: []const u8, at: i64) Error!void {
-        var st = try Stmt.prepare(db, "update session set ended = ? where node = ? and ended is null");
+    /// A session ended without its node's report (the node was cut off,
+    /// or no longer has it): its end time, exit status unknown.
+    pub fn sessionClose(db: *Db, sid: []const u8, at: i64) Error!void {
+        var st = try Stmt.prepare(db, "update session set sessionEnd = ? where sid = ? and sessionEnd is null");
         defer st.finalize();
         try st.bindInt(1, at);
-        try st.bindText(2, node);
+        try st.bindText(2, sid);
         try st.done();
     }
 
-    /// Marks every open session ended: termgate is starting, and no session
-    /// outlives it (the relay stops with termgate, and with it every
-    /// connection; an end reported meanwhile could not arrive).
+    /// termgate is starting: the sessions of its last run have ended (the
+    /// relay stops with termgate, and with it every connection); those
+    /// without an end time get this one.
     pub fn sessionsEndAll(db: *Db, at: i64) Error!void {
-        var st = try Stmt.prepare(db, "update session set ended = ? where ended is null");
+        var st = try Stmt.prepare(db, "update session set sessionEnd = ? where sessionEnd is null");
         defer st.finalize();
         try st.bindInt(1, at);
         try st.done();
@@ -1363,12 +1363,12 @@ pub const Db = struct {
     }
 
     pub fn sessionsActive(db: *Db, a: std.mem.Allocator) ![]Session {
-        return db.sessionQuery(a, session_select ++ " where ended is null order by started desc, sessionId desc", null);
+        return db.sessionQuery(a, session_select ++ " where sessionEnd is null order by sessionStart desc, sessionId desc", null);
     }
 
     /// The latest sessions (audit view), newest first.
     pub fn sessionsRecent(db: *Db, a: std.mem.Allocator, limit: i64) ![]Session {
-        return db.sessionQuery(a, session_select ++ " order by started desc, sessionId desc limit ?", limit);
+        return db.sessionQuery(a, session_select ++ " order by sessionStart desc, sessionId desc limit ?", limit);
     }
 
     /// Sessions, newest first, a page at a time; `key` (may be empty) is
@@ -1376,7 +1376,7 @@ pub const Db = struct {
     pub fn sessionsSearch(db: *Db, a: std.mem.Allocator, key: []const u8, page: i64) !Page(Session) {
         const cond = " where (?1 = '' or instr(lower(node), lower(?1)) > 0 or instr(lower(userName), lower(?1)) > 0)";
         const p = try db.pageOf("select count(*) from session" ++ cond, key, page);
-        var st = try Stmt.prepare(db, session_select ++ cond ++ " order by started desc, sessionId desc limit ?2 offset ?3");
+        var st = try Stmt.prepare(db, session_select ++ cond ++ " order by sessionStart desc, sessionId desc limit ?2 offset ?3");
         defer st.finalize();
         try st.bindText(1, key);
         try st.bindInt(2, page_len);
@@ -1400,7 +1400,7 @@ pub const Db = struct {
 
     /// The latest sessions on one node, newest first.
     pub fn sessionsOfNode(db: *Db, a: std.mem.Allocator, node: []const u8, limit: i64) ![]Session {
-        return db.sessionQueryNode(a, session_select ++ " where node = ? order by started desc, sessionId desc limit ?", node, limit);
+        return db.sessionQueryNode(a, session_select ++ " where node = ? order by sessionStart desc, sessionId desc limit ?", node, limit);
     }
 
     fn sessionQuery(db: *Db, a: std.mem.Allocator, sql: [:0]const u8, limit: ?i64) ![]Session {
@@ -1429,7 +1429,7 @@ pub const Db = struct {
         return list.toOwnedSlice(a);
     }
 
-    const session_select = "select sid, node, userKey, userName, started, ended, exitStatus from session";
+    const session_select = "select sid, node, userKey, userName, sessionStart, sessionEnd, exitStatus from session";
     const terminal_select = "select t.userId, u.name, t.userKey, u.nodes, t.maxUses, t.expires, t.revoked, t.created, t.uses " ++
         "from terminal t join user u on u.userId = t.userId";
 
@@ -1730,6 +1730,10 @@ test "terminal access: access key, redemption, uses, the user's nodes and sessio
     try testing.expectEqual(@as(?i64, 0), s1.exit_status);
     try testing.expectEqualStrings("ali", s1.user);
     try testing.expectEqual(@as(usize, 2), (try db.sessionsActive(a)).len);
+    // A session ended without its node's report
+    try db.sessionClose("S6", t0 + 60);
+    try db.sessionClose("S6", t0 + 99);
+    try testing.expectEqual(@as(usize, 1), (try db.sessionsActive(a)).len);
     // termgate starting: none is open any more
     try db.sessionsEndAll(t0 + 1000);
     try testing.expectEqual(@as(usize, 0), (try db.sessionsActive(a)).len);

@@ -55,13 +55,13 @@ const routes = [_]Route{
     .{ .path = "node/kick", .call = "svc.kickNode" },
     .{ .path = "node/status", .call = "svc.requestStatusOf" },
     .{ .path = "node/status_all", .call = "svc.requestStatus" },
-    .{ .path = "node/sessions", .call = "db.sessionsOfNode" },
+    .{ .path = "node/sessions", .call = "svc.sessionsOfNode" },
     // A user's terminal access
     .{ .path = "user/access_key", .call = "terminal.accessKey" },
     .{ .path = "user/terminal_revoke", .call = "terminal.revoke" },
     // Sessions
-    .{ .path = "session/browse", .call = "db.sessionsActive" },
-    .{ .path = "session/recent", .call = "db.sessionsSearch" },
+    .{ .path = "session/browse", .call = "svc.sessionsOpen" },
+    .{ .path = "session/recent", .call = "svc.sessionsSearch" },
     .{ .path = "session/end", .call = "svc.endSession" },
     .{ .path = "session/log", .call = "log.commands" },
     .{ .path = "session/watch_start", .call = "watch.start" },

@@ -127,7 +127,7 @@ If termgate is not running, the connection is refused ("termgate is offline"). T
 - Not encrypted: window sizes and the end of a session (no content), and subjects (who talks to which node, when, how much).
 
 **Monitoring**
-- The open sessions on the Sessions page come from termgate's own approvals and the end events.
+- Which sessions are open is known live, not stored: termgate keeps them in memory. A session is added when termgate approves it, and removed when the node reports its end, when the node is no longer connected, or when the node no longer has it: once a minute termgate asks each node with open sessions for its status, which lists the sessions open on it (sessions approved in the last 15 s are left alone, the node may not list them yet). After a restart the list starts empty: the relay restarts with termgate and no session survives it. The database keeps only when each session started and ended (`sessionStart`, `sessionEnd`); a session that closed without its node's report gets its end time when termgate removes it, and those of the last run when termgate starts.
 - Watching a session (read-only): termgate subscribes to `out.<node>.<user>.<sid>.*` and `in.<node>.<user>.<sid>.resize`, decrypts them and keeps them for the watching page, which feeds them into a libghostty-vt screen in the browser. It shows what happens from the moment watching starts; nothing is sent to the node and nodes do nothing extra.
 
 **Session logs**

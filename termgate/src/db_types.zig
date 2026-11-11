@@ -45,9 +45,13 @@ pub const Session = struct {
     user_key: []const u8,
     /// The user's name
     user: []const u8,
+    /// sessionStart and sessionEnd: the record of when it ran
     started: i64,
     ended: ?i64,
     exit_status: ?i64,
+    /// Whether it is open now: not stored, termgate knows it (service.zig,
+    /// the live sessions)
+    open: bool = false,
 };
 
 /// termgate's settings (Settings panel).

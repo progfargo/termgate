@@ -181,6 +181,8 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
         who.can("session", "end")
     else if (std.mem.eql(u8, name, "svc.kickNode"))
         who.can("node", "update") or who.can("node", "delete")
+    else if (std.mem.eql(u8, name, "svc.sessionsOpen") or std.mem.eql(u8, name, "svc.sessionsSearch") or std.mem.eql(u8, name, "svc.sessionsOfNode"))
+        who.can("session", "browse")
     else
         return null;
     if (!allowed) return err(.forbidden, "no right");
@@ -199,6 +201,32 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
 
     p.lock.lockUncancelable(p.io);
     defer p.lock.unlock(p.io);
+
+    // Sessions: the records from the database, which are open now from the
+    // service (none without the relay)
+    if (std.mem.eql(u8, name, "svc.sessionsOpen")) {
+        const list = if (p.service) |sv| try sv.sessionsOpen(a) else &[_]dbm.Session{};
+        return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .ok = list }, .{}) };
+    }
+    if (std.mem.eql(u8, name, "svc.sessionsSearch")) {
+        const page = blk: {
+            p.rpc.lock.lockUncancelable(p.io);
+            defer p.rpc.lock.unlock(p.io);
+            break :blk try p.rpc.db.sessionsSearch(a, str(args, 0) orelse "", @intCast(int(args, 1) orelse 1));
+        };
+        if (p.service) |sv| sv.markOpen(@constCast(page.rows));
+        return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .ok = page }, .{}) };
+    }
+    if (std.mem.eql(u8, name, "svc.sessionsOfNode")) {
+        const rows = blk: {
+            p.rpc.lock.lockUncancelable(p.io);
+            defer p.rpc.lock.unlock(p.io);
+            break :blk try p.rpc.db.sessionsOfNode(a, str(args, 0) orelse return err(.bad_request, "bad arguments"), @intCast(int(args, 1) orelse 20));
+        };
+        if (p.service) |sv| sv.markOpen(rows);
+        return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .ok = rows }, .{}) };
+    }
+
     const s = p.service orelse return .{ .body = "{\"err\":\"NotConnected\"}" };
     const ok: Reply = .{ .body = "{\"ok\":null}" };
 

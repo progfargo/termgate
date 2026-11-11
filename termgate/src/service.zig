@@ -115,6 +115,12 @@ pub const Service = struct {
     stopping: std.atomic.Value(bool) = .init(false),
     /// When status.req.all was last sent (requestStatus)
     status_asked: std.atomic.Value(i64) = .init(0),
+    /// The sessions open now: added when termgate approves one, removed
+    /// when the node reports its end, when the node is no longer connected
+    /// or no longer has it (its status). Not stored: the database keeps when
+    /// each session started and ended.
+    live_lock: Io.Mutex = .init,
+    live: std.ArrayList(dbm.Session) = .empty,
 
     pub fn start(gpa: std.mem.Allocator, io: Io, cfg: Config, db: *dbm.Db, lock: *Io.Mutex, recorder: *Recorder) !*Service {
         const s = try gpa.create(Service);
@@ -187,6 +193,8 @@ pub const Service = struct {
             defer s.lock.unlock(s.io);
             s.db.nodeSetOnline(&.{}, s.now()) catch {};
         }
+        for (s.live.items) |x| freeLive(s.gpa, x);
+        s.live.deinit(s.gpa);
         s.gpa.destroy(s);
     }
 
@@ -277,6 +285,122 @@ pub const Service = struct {
     const node_prefix = "node:";
     const user_prefix = "user:";
 
+    // --- the sessions open now -----------------------------------------------
+
+    fn freeLive(gpa: std.mem.Allocator, x: dbm.Session) void {
+        gpa.free(x.sid);
+        gpa.free(x.node);
+        gpa.free(x.user_key);
+        gpa.free(x.user);
+    }
+
+    /// A session termgate approved is open (also used by the tests).
+    pub fn liveAdd(s: *Service, x: dbm.Session) void {
+        s.live_lock.lockUncancelable(s.io);
+        defer s.live_lock.unlock(s.io);
+        for (s.live.items) |y| if (std.mem.eql(u8, y.sid, x.sid)) return;
+        const copy: dbm.Session = .{
+            .sid = s.gpa.dupe(u8, x.sid) catch return,
+            .node = s.gpa.dupe(u8, x.node) catch return,
+            .user_key = s.gpa.dupe(u8, x.user_key) catch return,
+            .user = s.gpa.dupe(u8, x.user) catch return,
+            .started = x.started,
+            .ended = null,
+            .exit_status = null,
+            .open = true,
+        };
+        s.live.append(s.gpa, copy) catch freeLive(s.gpa, copy);
+    }
+
+    /// Removes the open sessions `drop` says (node, sid) to drop; their sids
+    /// in `a`, for the record of their end.
+    fn liveRemove(s: *Service, a: std.mem.Allocator, ctx: anytype, comptime drop: fn (@TypeOf(ctx), dbm.Session) bool) []const []const u8 {
+        var gone: std.ArrayList([]const u8) = .empty;
+        s.live_lock.lockUncancelable(s.io);
+        defer s.live_lock.unlock(s.io);
+        var i: usize = 0;
+        while (i < s.live.items.len) {
+            const x = s.live.items[i];
+            if (drop(ctx, x)) {
+                gone.append(a, a.dupe(u8, x.sid) catch "") catch {};
+                freeLive(s.gpa, x);
+                _ = s.live.swapRemove(i);
+            } else i += 1;
+        }
+        return gone.items;
+    }
+
+    /// The sessions open now (copies in `a`), newest first.
+    pub fn sessionsOpen(s: *Service, a: std.mem.Allocator) ![]dbm.Session {
+        s.live_lock.lockUncancelable(s.io);
+        defer s.live_lock.unlock(s.io);
+        const out = try a.alloc(dbm.Session, s.live.items.len);
+        for (s.live.items, out) |x, *o| o.* = .{ .sid = try a.dupe(u8, x.sid), .node = try a.dupe(u8, x.node), .user_key = try a.dupe(u8, x.user_key), .user = try a.dupe(u8, x.user), .started = x.started, .ended = null, .exit_status = null, .open = true };
+        std.mem.sort(dbm.Session, out, {}, struct {
+            fn newer(_: void, l: dbm.Session, r: dbm.Session) bool {
+                return l.started > r.started;
+            }
+        }.newer);
+        return out;
+    }
+
+    /// Marks which of `rows` (from the database) are open now.
+    pub fn markOpen(s: *Service, rows: []dbm.Session) void {
+        s.live_lock.lockUncancelable(s.io);
+        defer s.live_lock.unlock(s.io);
+        for (rows) |*r| {
+            r.open = for (s.live.items) |x| (if (std.mem.eql(u8, x.sid, r.sid)) break true) else false;
+        }
+    }
+
+    /// Ends the open sessions of nodes that are not connected (`online`:
+    /// the names of those that are); their end time is recorded now.
+    fn liveKeepOnline(s: *Service, a: std.mem.Allocator, online: []const []const u8) void {
+        const Ctx = struct { names: []const []const u8 };
+        const gone = s.liveRemove(a, Ctx{ .names = online }, struct {
+            fn f(c: Ctx, x: dbm.Session) bool {
+                for (c.names) |n| if (std.mem.eql(u8, n, x.node)) return false;
+                return true;
+            }
+        }.f);
+        s.recordClosed(gone);
+    }
+
+    /// The node says which sessions it has open (its status): the open
+    /// sessions of the node are those, as far as termgate approved them.
+    fn liveSetNode(s: *Service, a: std.mem.Allocator, node: []const u8, open_now: []const []const u8) void {
+        // A session approved in the last seconds may not be in the node's
+        // list yet
+        const Ctx = struct { node: []const u8, open_now: []const []const u8, before: i64 };
+        const gone = s.liveRemove(a, Ctx{ .node = node, .open_now = open_now, .before = s.now() - 15 }, struct {
+            fn f(c: Ctx, x: dbm.Session) bool {
+                if (!std.mem.eql(u8, x.node, c.node) or x.started >= c.before) return false;
+                for (c.open_now) |sid| if (std.mem.eql(u8, sid, x.sid)) return false;
+                return true;
+            }
+        }.f);
+        s.recordClosed(gone);
+        if (gone.len > 0) log.info("{d} session(s) on {s} closed: the node no longer has them", .{ gone.len, node });
+        // Open on the node but not known open here (termgate's relay
+        // connection was gone for a while): back in, if termgate approved it
+        for (open_now) |sid| {
+            const rec = blk: {
+                s.lock.lockUncancelable(s.io);
+                defer s.lock.unlock(s.io);
+                break :blk s.db.sessionGet(a, sid) catch null;
+            };
+            if (rec) |r| if (r.ended == null and std.mem.eql(u8, r.node, node)) s.liveAdd(r);
+        }
+    }
+
+    /// The end time of sessions that closed without their node's report.
+    fn recordClosed(s: *Service, sids: []const []const u8) void {
+        if (sids.len == 0) return;
+        s.lock.lockUncancelable(s.io);
+        defer s.lock.unlock(s.io);
+        for (sids) |sid| s.db.sessionClose(sid, s.now()) catch {};
+    }
+
     // --- closing connections -------------------------------------------------
 
     /// Closes the connections of node `name` (disabled or deleted). The
@@ -284,11 +408,9 @@ pub const Service = struct {
     /// open sessions end with it and are marked ended now, since the node
     /// cannot report them any more.
     pub fn kickNode(s: *Service, name: []const u8) void {
-        {
-            s.lock.lockUncancelable(s.io);
-            defer s.lock.unlock(s.io);
-            s.db.sessionsEndNode(name, s.now()) catch {};
-        }
+        var arena: std.heap.ArenaAllocator = .init(s.gpa);
+        defer arena.deinit();
+        s.liveSetNode(arena.allocator(), name, &.{});
         s.kickLater(node_prefix, name);
     }
 
@@ -298,11 +420,7 @@ pub const Service = struct {
     pub fn kickUser(s: *Service, key: []const u8) void {
         var arena: std.heap.ArenaAllocator = .init(s.gpa);
         defer arena.deinit();
-        const sessions = blk: {
-            s.lock.lockUncancelable(s.io);
-            defer s.lock.unlock(s.io);
-            break :blk s.db.sessionsActive(arena.allocator()) catch &.{};
-        };
+        const sessions = s.sessionsOpen(arena.allocator()) catch &.{};
         for (sessions) |x| if (std.mem.eql(u8, x.user_key, key)) s.endSession(x.node, x.user_key, x.sid) catch {};
         s.kickLater(user_prefix, key);
     }
@@ -414,9 +532,13 @@ pub const Service = struct {
             offset += d.connections.len;
             if (d.connections.len == 0 or offset >= d.total) break;
         }
-        s.lock.lockUncancelable(s.io);
-        defer s.lock.unlock(s.io);
-        try s.db.nodeSetOnline(names.items, s.now());
+        {
+            s.lock.lockUncancelable(s.io);
+            defer s.lock.unlock(s.io);
+            try s.db.nodeSetOnline(names.items, s.now());
+        }
+        // A node no longer connected has no session open
+        s.liveKeepOnline(a, names.items);
     }
 
     // --- application subjects -----------------------------------------------
@@ -538,6 +660,7 @@ pub const Service = struct {
     /// deleted, forgotten sessions pruned.
     fn housekeeping(s: *Service) void {
         var last_hourly: i64 = 0;
+        var last_reconcile: i64 = 0;
         // Sessions already told they are over the limit
         var expired: std.StringHashMapUnmanaged(void) = .empty;
         defer {
@@ -546,7 +669,7 @@ pub const Service = struct {
             expired.deinit(s.gpa);
         }
         while (!s.stopping.load(.acquire)) {
-            s.housekeep(&expired, &last_hourly) catch |e| log.warn("housekeeping: {s}", .{@errorName(e)});
+            s.housekeep(&expired, &last_hourly, &last_reconcile) catch |e| log.warn("housekeeping: {s}", .{@errorName(e)});
             // Five seconds, in steps that notice a stop
             var waited: u32 = 0;
             while (waited < 25 and !s.stopping.load(.acquire)) : (waited += 1)
@@ -554,17 +677,29 @@ pub const Service = struct {
         }
     }
 
-    fn housekeep(s: *Service, expired: *std.StringHashMapUnmanaged(void), last_hourly: *i64) !void {
+    fn housekeep(s: *Service, expired: *std.StringHashMapUnmanaged(void), last_hourly: *i64, last_reconcile: *i64) !void {
         var arena: std.heap.ArenaAllocator = .init(s.gpa);
         defer arena.deinit();
         const a = arena.allocator();
         const t = s.now();
-        const settings, const active = blk: {
+        const settings = blk: {
             s.lock.lockUncancelable(s.io);
             defer s.lock.unlock(s.io);
-            break :blk .{ try s.db.settingsGet(), try s.db.sessionsActive(a) };
+            break :blk try s.db.settingsGet();
         };
+        const active = try s.sessionsOpen(a);
         s.recorder.max_output.store(settings.max_command_output, .release);
+
+        // Once a minute the nodes with open sessions say which they really
+        // have (their status): an end report lost on the way leaves no
+        // session open for ever
+        if (t - last_reconcile.* >= 60) {
+            last_reconcile.* = t;
+            for (active, 0..) |x, i| {
+                const asked = for (active[0..i]) |y| (if (std.mem.eql(u8, x.node, y.node)) break true) else false;
+                if (!asked) s.requestStatusOf(x.node);
+            }
+        }
 
         if (settings.max_session_minutes > 0) {
             const limit = settings.max_session_minutes * 60;
@@ -710,6 +845,14 @@ pub const Service = struct {
             if (d == .allow) try s.db.sessionSetKeys(req.sid, keys.?);
             break :blk d;
         };
+        if (decision == .allow) {
+            const rec = blk: {
+                s.lock.lockUncancelable(s.io);
+                defer s.lock.unlock(s.io);
+                break :blk try s.db.sessionGet(a, req.sid);
+            };
+            if (rec) |r| s.liveAdd(r);
+        }
         // Record the session from its first byte
         if (decision == .allow) s.recorder.open(req.sid, s.now());
         const tok = try core.approval.issue(a, s.cfg.issuer, req, decision, s.now());
@@ -729,9 +872,17 @@ pub const Service = struct {
         const Ev = struct { event: []const u8, sid: []const u8, at: i64, status: i64 = 0 };
         const ev = try std.json.parseFromSliceLeaky(Ev, arena.allocator(), m.payload, .{ .ignore_unknown_fields = true });
         if (std.mem.eql(u8, ev.event, "end")) {
-            s.lock.lockUncancelable(s.io);
-            defer s.lock.unlock(s.io);
-            try s.db.sessionEnd(ev.sid, ev.at, ev.status);
+            {
+                s.lock.lockUncancelable(s.io);
+                defer s.lock.unlock(s.io);
+                try s.db.sessionEnd(ev.sid, ev.at, ev.status);
+            }
+            const Ctx = struct { sid: []const u8 };
+            _ = s.liveRemove(arena.allocator(), Ctx{ .sid = ev.sid }, struct {
+                fn f(c: Ctx, x: dbm.Session) bool {
+                    return std.mem.eql(u8, c.sid, x.sid);
+                }
+            }.f);
         }
         try s.reply(m, "ok");
     }
@@ -739,9 +890,19 @@ pub const Service = struct {
     /// status.<node>: system info, sent by the node after connecting and
     /// when asked (status.req.all, status.req.<node>).
     fn recordStatus(s: *Service, m: Conn.Message) !void {
-        s.lock.lockUncancelable(s.io);
-        defer s.lock.unlock(s.io);
-        try s.db.nodeRecordStatus(lastToken(m.subject), m.payload, s.now());
+        var arena: std.heap.ArenaAllocator = .init(s.gpa);
+        defer arena.deinit();
+        const node = lastToken(m.subject);
+        // The sessions open on the node now (a tgnode that does not say
+        // leaves them as they are)
+        const Open = struct { sessions: ?[]const []const u8 = null };
+        const open = std.json.parseFromSliceLeaky(Open, arena.allocator(), m.payload, .{ .ignore_unknown_fields = true }) catch Open{};
+        {
+            s.lock.lockUncancelable(s.io);
+            defer s.lock.unlock(s.io);
+            try s.db.nodeRecordStatus(node, m.payload, s.now());
+        }
+        if (open.sessions) |list| s.liveSetNode(arena.allocator(), node, list);
     }
 };
 

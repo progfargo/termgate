@@ -144,6 +144,10 @@ fn addSession(f: *Fixture, comptime tag: []const u8, node: []const u8, user: []c
     try f.db.terminalUseAccessKey(uid, user);
     _ = try f.db.terminalUse(user, node, sid, started);
     try f.db.sessionSetKeys(sid, keys);
+    // Open now, as termgate knows it after approving it
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    f.service.liveAdd((try f.db.sessionGet(arena.allocator(), sid)).?);
     return keys;
 }
 

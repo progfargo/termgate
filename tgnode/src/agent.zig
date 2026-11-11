@@ -75,6 +75,9 @@ pub const Agent = struct {
     root: Io.Dir,
     /// Sessions open now
     open_sessions: std.atomic.Value(u32) = .init(0),
+    /// Their ids, for the status termgate checks its records against
+    open_lock: Io.Mutex = .init,
+    open_sids: std.ArrayList([22]u8) = .empty,
     /// Set while termgate has been unreachable for too long: open sessions
     /// end themselves
     cut: std.atomic.Value(bool) = .init(false),
@@ -117,6 +120,7 @@ pub const Agent = struct {
         a.sessions.cancel(a.io);
         a.conn.close();
         a.replay.deinit();
+        a.open_sids.deinit(a.gpa);
         a.gpa.free(inbox);
         a.gpa.destroy(a);
     }
@@ -210,9 +214,30 @@ pub const Agent = struct {
         var arena: std.heap.ArenaAllocator = .init(a.gpa);
         defer arena.deinit();
         const al = arena.allocator();
-        const status = try sysinfo.collect(al, a.io, a.root, "/");
+        var status = try sysinfo.collect(al, a.io, a.root, "/");
+        status.sessions = blk: {
+            a.open_lock.lockUncancelable(a.io);
+            defer a.open_lock.unlock(a.io);
+            const list = try al.alloc([]const u8, a.open_sids.items.len);
+            for (a.open_sids.items, list) |*sid, *x| x.* = try al.dupe(u8, sid);
+            break :blk list;
+        };
         const body = try std.json.Stringify.valueAlloc(al, status, .{});
         try a.conn.publish(try std.fmt.allocPrint(al, "status.{s}", .{a.cfg.name}), body);
+    }
+
+    /// Keeps the ids of the open sessions (status.sessions).
+    fn trackOpen(a: *Agent, sid: *const [22]u8, open: bool) void {
+        a.open_lock.lockUncancelable(a.io);
+        defer a.open_lock.unlock(a.io);
+        if (open) {
+            a.open_sids.append(a.gpa, sid.*) catch {};
+            return;
+        }
+        for (a.open_sids.items, 0..) |*x, i| if (std.mem.eql(u8, x, sid)) {
+            _ = a.open_sids.swapRemove(i);
+            return;
+        };
     }
 
     fn replyError(a: *Agent, reply: []const u8, msg: []const u8) void {
@@ -350,8 +375,10 @@ const Session = struct {
 
         const sub = s.sub.?;
         _ = a.open_sessions.fetchAdd(1, .release);
+        a.trackOpen(&s.sid, true);
         var pump = io.concurrent(pumpOutput, .{s}) catch {
             _ = a.open_sessions.fetchSub(1, .release);
+            a.trackOpen(&s.sid, false);
             sub.unsubscribe();
             s.shell.hangup();
             _ = s.shell.wait();
@@ -397,6 +424,7 @@ const Session = struct {
         } else |_| {}
         // Closed for the watchdog before the (possibly long) end report
         _ = a.open_sessions.fetchSub(1, .release);
+        a.trackOpen(&s.sid, false);
         s.reportEnd(status);
     }
 

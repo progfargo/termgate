@@ -41,6 +41,12 @@ pub fn setValue(id: []const u8, text: []const u8) void {
     el.set("value", js.string(text)) catch {};
 }
 
+pub fn setDisabled(id: []const u8) void {
+    const el = byId(id) orelse return;
+    defer el.deinit();
+    el.set("disabled", true) catch {};
+}
+
 pub fn checked(id: []const u8) bool {
     const el = byId(id) orelse return false;
     defer el.deinit();

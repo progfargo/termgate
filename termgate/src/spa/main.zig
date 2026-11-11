@@ -14,15 +14,17 @@ const layout = @import("layout.zig");
 const Form = @import("form.zig").Form;
 
 const login = @import("pages/login.zig");
-const welcome = @import("pages/welcome.zig");
 const user = @import("pages/user.zig");
 const role = @import("pages/role.zig");
 const profile = @import("pages/profile.zig");
 const node = @import("pages/node.zig");
+const session = @import("pages/session.zig");
+const audit = @import("pages/audit.zig");
+const config = @import("pages/config.zig");
+const help = @import("pages/help.zig");
 
 const routes = [_]router.Route{
     .{ .path = "/login", .handler = login.render, .public = true },
-    .{ .path = "/welcome", .handler = welcome.render },
     .{ .path = "/user", .handler = user.browse },
     .{ .path = "/user/insert", .handler = user.insert },
     .{ .path = "/user/update", .handler = user.update },
@@ -38,6 +40,11 @@ const routes = [_]router.Route{
     .{ .path = "/node/insert", .handler = node.insert },
     .{ .path = "/node/display", .handler = node.display },
     .{ .path = "/node/delete", .handler = node.delete },
+    .{ .path = "/session", .handler = session.browse },
+    .{ .path = "/session/log", .handler = session.log },
+    .{ .path = "/audit", .handler = audit.browse },
+    .{ .path = "/config", .handler = config.browse },
+    .{ .path = "/help", .handler = help.render },
     .{ .path = "/profile", .handler = profile.render },
     .{ .path = "/profile/update_pass", .handler = profile.updatePass },
 };
@@ -72,11 +79,23 @@ const actions = [_]Action{
     .{ .name = "nodeSetDisabled", .run = node.setDisabled },
     .{ .name = "nodeRefresh", .run = node.refresh },
     .{ .name = "nodeDelete", .run = node.submitDelete },
+    .{ .name = "sessionEnd", .run = session.end },
+    .{ .name = "configUpdate", .run = config.submit },
 };
 
-/// The first page the user may open.
+/// The first page the user may open, in the menu's order.
 fn home() []const u8 {
-    return "/welcome";
+    const pages = [_]struct { []const u8, []const u8, []const u8 }{
+        .{ "/node", "node", "browse" },
+        .{ "/session", "session", "browse" },
+        .{ "/audit", "audit", "browse" },
+        .{ "/user", "user", "browse" },
+        .{ "/role", "role", "browse" },
+        .{ "/config", "config", "browse" },
+        .{ "/profile", "profile", "browse" },
+    };
+    for (pages) |p| if (state.can(p[1], p[2])) return p[0];
+    return "/help";
 }
 
 fn onSignedOut() void {

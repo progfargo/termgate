@@ -9,15 +9,7 @@ td .button-group-fixed {
     row-gap: 4px;
 }
 
-/* The info column on the right of the command row (counts, a state):
-   plain text beside the buttons' column, with less room under the row */
-.row-command:has(> .col-info) > .col {
-    flex: 1 1 0;
-    padding-bottom: 0;
-}
-.row-command > .col-info {
-    flex: 0 0 auto;
+/* A table's caption on its right (counts about the list) */
+table caption.right {
     text-align: right;
-    white-space: nowrap;
-    color: var(--textColor);
 }

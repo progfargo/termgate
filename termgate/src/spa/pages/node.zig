@@ -165,11 +165,15 @@ pub fn browse(query: []const u8) void {
     const sum = if (fetch.postRaw("node/summary", "[]")) |s| fetch.fieldAs(Summary, s, "data") orelse Summary{} else Summary{};
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Nodes", "" }});
-    content.commandStart(&b);
-    if (state.can("node", "insert")) b.raw("<a href=\"#/node/insert\" class=\"button button-default button-sm\">New</a>");
-    content.commandEndNote(&b, "{d} nodes · {d} online · {d} waiting for approval{s}", .{ sum.total, sum.online, sum.pending, if (key.len > 0) std.fmt.allocPrint(app.arena(), " · {d} found", .{page.total}) catch "" else "" });
+    if (state.can("node", "insert")) {
+        content.commandStart(&b);
+        b.raw("<a href=\"#/node/insert\" class=\"button button-default button-sm\">New</a>");
+        content.commandEnd(&b);
+    }
     content.contentStart(&b);
-    b.raw("<table><thead><tr><th>Name</th><th class=\"center\">State</th><th>Last seen</th><th>System</th><th class=\"right\">Command</th></tr></thead><tbody>");
+    b.raw("<table>");
+    content.caption(&b, "{d} nodes · {d} online · {d} waiting for approval{s}", .{ sum.total, sum.online, sum.pending, if (key.len > 0) std.fmt.allocPrint(app.arena(), " · {d} found", .{page.total}) catch "" else "" });
+    b.raw("<thead><tr><th>Name</th><th class=\"center\">State</th><th>Last seen</th><th>System</th><th class=\"right\">Command</th></tr></thead><tbody>");
     if (list.len == 0) b.raw("<tr><td colspan=\"5\">Empty list.</td></tr>");
     for (list) |n| {
         b.add("<tr><td><a href=\"{s}\">", .{nodeUrl("#/node/display", n.id)});

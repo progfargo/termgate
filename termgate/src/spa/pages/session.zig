@@ -29,11 +29,13 @@ fn list(path: []const u8, args: []const u8) []const Session {
 
 /// The sessions, open and ended, the search word `key` marked in the node
 /// and user names; an open one has Watch and End.
-fn table(b: *app.Buf, sessions: []const Session, key: []const u8) void {
+fn table(b: *app.Buf, sessions: []const Session, key: []const u8, open_count: usize, total: i64) void {
     const can_watch = state.can("session", "watch");
     const can_end = state.can("session", "end");
     const can_log = state.can("session", "log");
-    b.raw("<table><thead><tr><th>Node</th><th>User</th><th class=\"center\">Status</th><th>Started</th><th>Ended</th><th class=\"right\">Command</th></tr></thead><tbody>");
+    b.raw("<table>");
+    content.caption(b, "{d} sessions · {d} open", .{ total, open_count });
+    b.raw("<thead><tr><th>Node</th><th>User</th><th class=\"center\">Status</th><th>Started</th><th>Ended</th><th class=\"right\">Command</th></tr></thead><tbody>");
     if (sessions.len == 0) b.raw("<tr><td colspan=\"6\">Empty list.</td></tr>");
     for (sessions) |s| {
         const open = s.ended == null;
@@ -108,10 +110,8 @@ pub fn browse(query: []const u8) void {
     const recent = if (fetch.post("session/recent", .{ key, @max(1, c.int("pn")) })) |ans| fetch.fieldAs(content.Page(Session), ans, "data") orelse content.Page(Session){} else content.Page(Session){};
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Sessions", "" }});
-    content.commandStart(&b);
-    content.commandEndNote(&b, "{d} sessions · {d} open", .{ recent.total, open.len });
     content.contentStart(&b);
-    table(&b, recent.rows, key);
+    table(&b, recent.rows, key, open.len, recent.total);
     content.contentEnd(&b);
     content.ruler(&b, recent.pages, recent.page, "sessionGoPage");
     content.show(&b);

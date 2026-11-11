@@ -57,10 +57,10 @@ pub fn browse(query: []const u8) void {
     const page = fetch.fieldAs(content.Page(Action), answer, "data") orelse content.Page(Action){};
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Audit", "" }});
-    content.commandStart(&b);
-    content.commandEndNote(&b, "{d} entries{s}", .{ page.total, if (key.len > 0) " found" else "" });
     content.contentStart(&b);
-    b.raw("<table><thead><tr><th>When</th><th>Who</th><th>What</th><th>About</th><th class=\"center\">Result</th></tr></thead><tbody>");
+    b.raw("<table>");
+    content.caption(&b, "{d} entries{s}", .{ page.total, if (key.len > 0) " found" else "" });
+    b.raw("<thead><tr><th>When</th><th>Who</th><th>What</th><th>About</th><th class=\"center\">Result</th></tr></thead><tbody>");
     if (page.rows.len == 0) b.raw("<tr><td colspan=\"5\">Empty list.</td></tr>");
     for (page.rows) |x| {
         b.add("<tr><td>{s}</td><td>", .{content.dateTime(x.at)});

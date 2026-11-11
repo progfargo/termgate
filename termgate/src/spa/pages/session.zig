@@ -117,7 +117,6 @@ pub fn browse(query: []const u8) void {
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Sessions", "" }});
     content.commandStart(&b);
-    b.raw("<a href=\"#/session\" class=\"button button-default button-sm\" title=\"Read again.\"><i class=\"fas fa-rotate fa-fw\"></i></a>");
     content.commandEndNote(&b, "{d} open", .{open.len});
     content.contentStart(&b);
     table(&b, open, true);

@@ -167,7 +167,6 @@ pub fn browse(query: []const u8) void {
     content.header(&b, &.{.{ "Nodes", "" }});
     content.commandStart(&b);
     if (state.can("node", "insert")) b.raw("<a href=\"#/node/insert\" class=\"button button-default button-sm\">New</a>");
-    b.add("<a href=\"#{s}\" class=\"button button-default button-sm\" title=\"Read again.\"><i class=\"fas fa-rotate fa-fw\"></i></a>", .{dom.hash()});
     content.commandEndNote(&b, "{d} nodes · {d} online · {d} waiting for approval{s}", .{ sum.total, sum.online, sum.pending, if (key.len > 0) std.fmt.allocPrint(app.arena(), " · {d} found", .{page.total}) catch "" else "" });
     content.contentStart(&b);
     b.raw("<table><thead><tr><th>Name</th><th>State</th><th>Last seen</th><th>System</th><th class=\"right\">Command</th></tr></thead><tbody>");

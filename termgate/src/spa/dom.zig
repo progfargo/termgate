@@ -121,6 +121,15 @@ pub fn hash() []const u8 {
 }
 
 /// Copies text to the clipboard (the page's own helper, web/spa/boot.js).
+/// Copies the full link of `url` (a page's address after the #) and
+/// flashes the link button (web/spa/boot.js; our earlier project's copyUrl).
+pub fn copyUrl(url: []const u8) void {
+    if (app.waiting) return;
+    const tg = js.global.get(js.Object, "tg") catch return;
+    defer tg.deinit();
+    tg.call(void, "copyUrl", .{js.string(url)}) catch {};
+}
+
 pub fn copy(text: []const u8) void {
     if (app.waiting) return;
     const tg = js.global.get(js.Object, "tg") catch return;

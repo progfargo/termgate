@@ -153,9 +153,9 @@
     await go("#/user");
     await wait("the users", titled("Users"));
     await click(`[data-action=userSelect][data-id='${veli}']`);
-    await wait("acting as veli", () => text("#user-info").includes("Signed in as superuser"));
+    await wait("acting as veli", () => $("a.unselect-user") && text("#user-info").includes("veli"));
     await click("a.unselect-user");
-    await wait("back to myself", () => !text("#user-info").includes("Signed in as"));
+    await wait("back to myself", () => !$("a.unselect-user"));
 
     step = "last admin";
     await go("#/user/delete?userId=" + veli);

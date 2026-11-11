@@ -93,10 +93,9 @@ pub const CargoList = struct {
         }
     }
 
-    /// The variables of an address's query; those it does not have are
-    /// at their default (the address is the whole state).
+    /// The variables of an address's query; those it does not have stay
+    /// as they are (our earlier project's Read).
     pub fn read(c: *CargoList, query: []const u8) void {
-        c.clear();
         for (c.vars[0..c.len]) |v| {
             const text = app.queryValue(query, v.name);
             if (text.len > 0) c.setText(v.name, text);
@@ -153,7 +152,7 @@ test "the address of a list: read, changed, written" {
     c.setInt("pn", 1);
     c.setInt("rid", 4);
     try std.testing.expectEqualStrings("/user?key=ist%20gw&rid=4&stat=blocked", c.makeUrl("/user", &.{ "key", "pn", "rid", "stat" }));
-    // Reading another address: what it does not have goes back to default
+    // Reading another address: what it does not have stays
     c.read("pn=2");
-    try std.testing.expectEqualStrings("/user?pn=2", c.makeUrl("/user", &.{ "key", "pn", "rid", "stat" }));
+    try std.testing.expectEqualStrings("/user?key=ist%20gw&pn=2&rid=4&stat=blocked", c.makeUrl("/user", &.{ "key", "pn", "rid", "stat" }));
 }

@@ -271,7 +271,7 @@ pub const Db = struct {
                 try db.exec("insert or ignore into roleRight(roleId, module, action) values(1, '" ++ m.name ++ "', '" ++ ac.name ++ "')");
         }
         try db.seedTerminalRole();
-        inline for (.{ "panel:login", "node:browse", "session:browse", "session:watch", "session:log", "audit:browse", "user:browse", "config:browse", "profile:browse", "profile:update_password" }) |r| {
+        inline for (.{ "panel:login", "node:browse", "session:browse", "session:watch", "session:log", "audit:browse", "user:browse", "config:browse", "profile:browse", "profile:update_password", "help:browse" }) |r| {
             const p = comptime rights.parse(r).?;
             try db.exec("insert or ignore into roleRight(roleId, module, action) values(2, '" ++ p.module ++ "', '" ++ p.action ++ "')");
         }
@@ -819,7 +819,8 @@ pub const Db = struct {
         return out;
     }
 
-    pub fn settingsSet(db: *Db, v: Settings) Error!void {
+    pub fn settingsSet(db: *Db, v: Settings) (error{InvalidSpec} || Error)!void {
+        if (v.ruler_len < 2 or v.ruler_len > 10) return error.InvalidSpec;
         try db.begin();
         errdefer db.rollback();
         inline for (@typeInfo(Settings).@"struct".field_names) |fname| {
@@ -1809,6 +1810,9 @@ test "settings and session logs" {
     try testing.expectEqual(@as(i64, 500), st.max_command_output);
     try testing.expectEqual(@as(i64, 0), st.max_session_minutes);
     try testing.expectEqual(@as(i64, 7), st.log_days);
+    try testing.expectEqual(@as(i64, 4), st.ruler_len);
+    try testing.expectError(error.InvalidSpec, db.settingsSet(.{ .ruler_len = 1 }));
+    try testing.expectError(error.InvalidSpec, db.settingsSet(.{ .ruler_len = 11 }));
 
     try db.commandAdd("S1", .{ .seq = 1, .at = t0, .line = "$ ls", .output = "a b", .output_chars = 3 });
     try db.commandAdd("S1", .{ .seq = 2, .at = t0 + 10, .line = "$ pwd", .output = "/root", .output_chars = 5 });

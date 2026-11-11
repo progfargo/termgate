@@ -9,7 +9,8 @@ td .button-group-fixed {
     row-gap: 4px;
 }
 
-/* A table's caption on its right (counts about the list) */
-table caption.right {
-    text-align: right;
+/* A table's caption (counts about the list) under the table */
+table caption {
+    caption-side: bottom;
+    padding: var(--u2) 0 0 0;
 }

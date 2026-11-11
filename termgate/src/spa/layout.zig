@@ -11,7 +11,7 @@ const left_menu = @import("content/left_menu.zig");
 const top_menu = @import("content/top_menu.zig");
 
 const default_layout =
-    \\<div class="left-menu" id="left-menu-div"><div id="left-menu-nav"></div><div class="user-info" id="user-info"></div></div>
+    \\<div class="left-menu" id="left-menu-div"><div id="left-menu-nav"></div><div class="user-info" id="user-info"></div><div class="logo"><img src="/icon-192.png" alt="termgate logo"></div></div>
     \\<header>
     \\<div class="top-menu-button" id="top-menu-btn" data-action="toggleMobileMenu"><i class="fa fa-bars"></i></div>
     \\<div class="left-menu-button" id="left-menu-btn" data-action="toggleSidebar"><i class="fa fa-bars"></i></div>
@@ -74,13 +74,12 @@ pub fn reset() void {
 fn userInfo() void {
     const u = state.user orelse return;
     var b: app.Buf = .{};
-    b.add("<p><strong>User:</strong> {f}", .{app.esc(u.name)});
-    if (u.real != null and u.can_unselect) b.raw(" <a href=\"#/user/unselect\" class=\"unselect-user\" title=\"Unselect effective user.\"><i class=\"fas fa-times\"></i></a>");
+    b.add("<p><strong>User:</strong> <span title=\"{f}\">{f}</span>", .{ app.esc(u.name), app.esc(u.name) });
+    if (u.real != null) b.raw(" <a href=\"#/user/unselect\" class=\"unselect-user\" title=\"Unselect effective user.\"><i class=\"fas fa-times\"></i></a>");
     b.raw("</p>");
-    if (u.real) |real| b.add("<p><small>Signed in as {f}</small></p>", .{app.esc(real)});
     dom.setHtml("user-info", b.str());
 }
 
 fn footerNote() void {
-    dom.setHtml("footer-note", "<p><small>termgate</small></p>");
+    dom.setHtml("footer-note", "<p><small>&copy; 2026 ionova.net ver:0.0.0</small></p>");
 }

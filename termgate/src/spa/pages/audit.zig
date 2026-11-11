@@ -35,14 +35,14 @@ pub fn submitSearch(f: Form) void {
     const c = cargo();
     c.setStr("key", f.trimmed("key"));
     c.setInt("pn", 1);
-    router.go(c.makeUrl("/audit", &cg_names));
+    browse("");
 }
 
 /// A page number under the list.
 pub fn goPage(f: Form) void {
     const c = cargo();
     c.readMap(f);
-    router.go(c.makeUrl("/audit", &cg_names));
+    browse("");
 }
 
 pub fn browse(query: []const u8) void {
@@ -50,7 +50,8 @@ pub fn browse(query: []const u8) void {
     dom.setBodyId("");
     layout.renderDefault("audit");
     const c = cargo();
-    c.read(query);
+    if (query.len > 0) c.read(query);
+    state.setExternalUrl(c.makeUrl("/audit", &cg_names));
     const key = c.str("key");
     content.search("auditSearch", key);
     const answer = fetch.post("audit/browse", .{ key, @max(1, c.int("pn")) }) orelse return;

@@ -55,7 +55,7 @@ pub fn render(query: []const u8) void {
     const node = c.str("node");
     const key = c.str("userKey");
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Sessions", "#/session" }, .{ node, "" }, .{ "Watch", "" } });
+    content.header(&b, &.{ .{ "Sessions", "#/session" }, .{ std.fmt.allocPrint(app.arena(), "Watch: {s}", .{node}) catch "Watch", "" } });
     content.commandStart(&b);
     b.raw("<a href=\"#/session\" class=\"button button-default button-sm\">Back</a>");
     if (state.can("session", "end")) b.add("<button type=\"button\" data-action=\"sessionEnd\" id=\"watch-end\" data-sid=\"{s}\" data-node=\"{f}\" data-key=\"{f}\" class=\"button button-error button-sm\" title=\"Ends the user's session on the node; leaving this page only stops watching.\">End session</button>", .{ sid, app.esc(node), app.esc(key) });

@@ -89,21 +89,22 @@ pub fn submitSearch(f: Form) void {
     const c = cargo();
     c.setStr("key", f.trimmed("key"));
     c.setInt("pn", 1);
-    router.go(c.makeUrl("/session", &cg_names));
+    browse("");
 }
 
 /// A page number under the list.
 pub fn goPage(f: Form) void {
     const c = cargo();
     c.readMap(f);
-    router.go(c.makeUrl("/session", &cg_names));
+    browse("");
 }
 
 pub fn browse(query: []const u8) void {
     if (!state.can("session", "browse")) return router.renderBadRequest();
     begin("session");
     const c = cargo();
-    c.read(query);
+    if (query.len > 0) c.read(query);
+    state.setExternalUrl(c.makeUrl("/session", &cg_names));
     const key = c.str("key");
     content.search("sessionSearch", key);
     const open = list("session/browse", "[]");
@@ -150,7 +151,7 @@ pub fn log(query: []const u8) void {
     const answer = fetch.post("session/log", .{sid}) orelse return;
     const cmds = fetch.fieldAs([]const Command, answer, "data") orelse &.{};
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Sessions", "#/session" }, .{ sid, "" }, .{ "Log", "" } });
+    content.header(&b, &.{ .{ "Sessions", "#/session" }, .{ std.fmt.allocPrint(app.arena(), "Log: {s}", .{sid}) catch "Log", "" } });
     content.contentStart(&b);
     if (cmds.len == 0) b.raw("<p>Nothing was typed in this session.</p>");
     for (cmds) |c| {

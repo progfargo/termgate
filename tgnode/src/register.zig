@@ -22,8 +22,8 @@ const log = std.log.scoped(.tgnode);
 pub const Options = struct {
     /// Time between registration requests while waiting for the admin
     poll: Io.Duration = .fromSeconds(5),
-    /// Give up after this long (the node key expires after 24 h anyway)
-    give_up_after: Io.Duration = .fromSeconds(24 * 3600),
+    /// Give up after this long (the node key expires after an hour anyway)
+    give_up_after: Io.Duration = .fromSeconds(3600),
 };
 
 pub const Error = error{

@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const app = @import("../app.zig");
+const state = @import("../state.zig");
 
 pub const PageTitle = struct {
     items: std.ArrayList([]const u8) = .empty,
@@ -19,6 +20,8 @@ pub const PageTitle = struct {
             if (i > 0) b.raw(" <i class=\"fa fa-fw fa-angle-right\"></i> ");
             b.raw(item);
         }
-        b.raw("</h3></div>");
+        b.raw("</h3>");
+        if (state.external_url.len > 0) b.raw("<button class=\"button button-default button-sm\" data-action=\"copyUrl\" title=\"Copy page link.\"><i class=\"fa fa-link\"></i></button>");
+        b.raw("</div>");
     }
 };

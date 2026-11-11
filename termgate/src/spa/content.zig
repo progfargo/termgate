@@ -69,9 +69,10 @@ pub fn commandEnd(b: *app.Buf) void {
     b.raw("</div></div></div>");
 }
 
-/// A table's caption on its right: an info about the list (counts).
+/// A table's caption, shown under it (termgate.css): an info about the
+/// list (counts). Comes right after <table>.
 pub fn caption(b: *app.Buf, comptime fmt: []const u8, args: anytype) void {
-    b.raw("<caption class=\"right\">");
+    b.raw("<caption>");
     b.add(fmt, args);
     b.raw("</caption>");
 }

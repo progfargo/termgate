@@ -54,6 +54,13 @@
         if (!box.querySelector(".alert")) box.innerHTML = "";
       }, 5000);
     },
+    // The page title's link button: the page's full address (our earlier project's
+    // copyUrl), the button blinks
+    copyUrl(url) {
+      tg.copy(location.origin + "/#" + url);
+      const el = document.querySelector("[data-action='copyUrl']");
+      if (el) { el.style.opacity = "0"; setTimeout(() => { el.style.opacity = "1"; }, 100); }
+    },
     // Clipboard, for the panel's Copy buttons
     copy(text) {
       if (navigator.clipboard) { navigator.clipboard.writeText(text).catch(() => {}); return; }

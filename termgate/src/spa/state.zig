@@ -23,6 +23,22 @@ var user_arena: std.heap.ArenaAllocator = .init(app.gpa);
 pub var user: ?User = null;
 /// Whether signing in asks for the authenticator code
 pub var second_step = true;
+/// The settings the panel uses (our earlier project's state.Config): page numbers
+/// on each side of the current one under a list
+pub var ruler_len: i64 = 4;
+
+/// The address of the list shown, with its state (our earlier project's
+/// ExternalUrl): the page title's link button copies it. Cleared at each
+/// page (router.zig).
+var external_buf: [512]u8 = undefined;
+pub var external_url: []const u8 = "";
+
+pub fn setExternalUrl(url: []const u8) void {
+    if (app.waiting) return;
+    const n = @min(url.len, external_buf.len);
+    @memcpy(external_buf[0..n], url[0..n]);
+    external_url = external_buf[0..n];
+}
 
 pub fn signedIn() bool {
     return user != null;

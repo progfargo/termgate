@@ -1,5 +1,5 @@
 //! The menu at the top right: our earlier project's content/top_menu, as it is.
-//! Profile, Help, Sign out and the theme switch.
+//! Profile, Help, Logout and the theme switch.
 
 const std = @import("std");
 const app = @import("../app.zig");
@@ -23,9 +23,8 @@ pub fn render(active_name: []const u8) void {
 
     tax.add("root", "end", 0, true, .{});
     tax.add("profile", "root", 10, state.can("profile", "browse"), .{ .url = "#/profile", .label = "Profile", .icon = "fas fa-user" });
-    // Help is for everyone (termgate has no help right)
-    tax.add("help", "root", 20, true, .{ .url = "#/help", .label = "Help", .icon = "fas fa-life-ring" });
-    tax.add("logout", "root", 30, state.signedIn(), .{ .url = "#/logout", .label = "Sign out", .icon = "fas fa-sign-out-alt" });
+    tax.add("help", "root", 20, state.can("help", "browse"), .{ .url = "#/help", .label = "Help", .icon = "fas fa-life-ring" });
+    tax.add("logout", "root", 30, state.signedIn(), .{ .url = "#/logout", .label = "Logout", .icon = "fas fa-sign-out-alt" });
 
     if (active_name.len > 0 and tax.isExists(active_name)) tax.getItem(active_name).data.is_active = true;
 

@@ -12,7 +12,7 @@ const router = @import("../router.zig");
 const content = @import("../content.zig");
 const Form = @import("../form.zig").Form;
 
-const Settings = struct { max_command_output: i64 = 10_000, max_session_minutes: i64 = 480, log_days: i64 = 30 };
+const Settings = struct { max_command_output: i64 = 10_000, max_session_minutes: i64 = 480, log_days: i64 = 30, ruler_len: i64 = 4 };
 const Relay = struct { host: []const u8 = "", port: u16 = 0, ca_fingerprint: []const u8 = "" };
 
 fn begin() void {
@@ -43,6 +43,7 @@ fn render(s: Settings, relay: Relay) void {
     content.field(&b, "config-minutes-input", "Longest session, minutes:", num(s.max_session_minutes), .{ .max = 9, .help = "Sessions are ended after this; 0: no limit." });
     content.field(&b, "config-output-input", "Output kept per command, characters:", num(s.max_command_output), .{ .max = 9, .help = "In the session log." });
     content.field(&b, "config-days-input", "Keep session logs, days:", num(s.log_days), .{ .max = 9, .help = "Older logs are deleted; 0: kept." });
+    content.field(&b, "config-ruler-input", "Ruler Length:", num(s.ruler_len), .{ .max = 2, .help = "Number of links in a ruler that is shown in some pages (2 to 10)." });
     if (can_update) b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"configUpdate\" class=\"button button-primary button-sm\">Submit</button></div></div>");
     b.raw("</form>");
     content.contentEnd(&b);
@@ -52,7 +53,7 @@ fn render(s: Settings, relay: Relay) void {
     b.raw("<p><small>Nodes and users connect to this address; set with termgate init.</small></p>");
     content.contentEnd(&b);
     content.show(&b);
-    if (!can_update) for ([_][]const u8{ "config-minutes-input", "config-output-input", "config-days-input" }) |id| dom.setDisabled(id);
+    if (!can_update) for ([_][]const u8{ "config-minutes-input", "config-output-input", "config-days-input", "config-ruler-input" }) |id| dom.setDisabled(id);
 }
 
 pub fn submit(f: Form) void {
@@ -65,11 +66,15 @@ pub fn submit(f: Form) void {
     const minutes = parse(f.trimmed("config-minutes-input"));
     const output = parse(f.trimmed("config-output-input"));
     const days = parse(f.trimmed("config-days-input"));
-    if (minutes == null or output == null or days == null) {
+    const ruler = parse(f.trimmed("config-ruler-input"));
+    if (minutes == null or output == null or days == null or ruler == null) {
         state.say("warning", "Each value is a whole number, 0 or more.");
         return browse("");
     }
-    _ = fetch.post("config/update", .{Settings{ .max_session_minutes = minutes.?, .max_command_output = output.?, .log_days = days.? }}) orelse return;
-    if (fetch.refused()) state.keepMessages() else state.say("success", "Record has been changed.");
+    _ = fetch.post("config/update", .{Settings{ .max_session_minutes = minutes.?, .max_command_output = output.?, .log_days = days.?, .ruler_len = ruler.? }}) orelse return;
+    if (fetch.refused()) state.keepMessages() else {
+        state.say("success", "Record has been changed.");
+        state.ruler_len = ruler.?;
+    }
     browse("");
 }

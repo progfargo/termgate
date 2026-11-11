@@ -119,6 +119,7 @@ pub fn reload() void {
     if (fetch.field(answer, "second_step")) |s| if (s == .bool) {
         state.second_step = s.bool;
     };
+    if (fetch.fieldAs(struct { ruler_len: i64 = 4 }, answer, "config")) |c| state.ruler_len = c.ruler_len;
 }
 
 pub fn logout(_: Form) void {

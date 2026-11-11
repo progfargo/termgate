@@ -69,6 +69,47 @@ fn show(b: *const app.Buf) void {
     dom.focusFirstField();
 }
 
+/// The pages of a user; the button of the one shown is selected.
+const Tab = enum { none, info, edit, roles, new_pass, terminal, delete };
+
+/// A user's page: the path back (Users, the user's Info), then `title`,
+/// and its toolbar.
+fn recordHeader(b: *app.Buf, u: User, tab: Tab, title: []const u8) void {
+    if (tab == .info) {
+        content.header(b, &.{ .{ "Users", "#/user" }, .{ u.name, "" } });
+    } else content.header(b, &.{ .{ "Users", "#/user" }, .{ u.name, userUrl("#/user/display", u.id) }, .{ title, "" } });
+    content.commandStart(b);
+    toolbar(b, u, "sm", tab);
+    content.commandEnd(b);
+}
+
+/// A user's buttons, by the user's rights and the rules (nobody changes
+/// the superuser, nobody deletes or acts as themselves).
+fn toolbar(b: *app.Buf, u: User, size: []const u8, tab: Tab) void {
+    const me = state.user.?;
+    const own = std.mem.eql(u8, u.name, me.name);
+    const sel = struct {
+        fn f(t: Tab, want: Tab) []const u8 {
+            return if (t == want) " selected" else "";
+        }
+    }.f;
+    const Btn = struct { tab: Tab, path: []const u8, label: []const u8, title: []const u8, show: bool, class: []const u8 = "default" };
+    const buttons = [_]Btn{
+        .{ .tab = .info, .path = "#/user/display", .label = "Info", .title = "The user's record.", .show = true },
+        .{ .tab = .edit, .path = "#/user/update", .label = "Edit", .title = "Edit record.", .show = !u.superuser and state.can("user", "update") },
+        .{ .tab = .roles, .path = "#/user/role", .label = "Roles", .title = "Edit user roles.", .show = !u.superuser and state.can("user", "role_browse") },
+        .{ .tab = .new_pass, .path = "#/user/update_pass", .label = "New Pass", .title = "Give the user a new password.", .show = !u.superuser and state.can("user", "update_pass") },
+        .{ .tab = .terminal, .path = "#/user/terminal", .label = "Terminal", .title = "Terminal access with tgterm.", .show = state.can("user", "access") },
+        .{ .tab = .delete, .path = "#/user/delete", .label = "Delete", .title = "Delete record.", .show = !u.superuser and !own and state.can("user", "delete"), .class = "error" },
+    };
+    // Act as the user: not oneself, not a blocked user, the superuser
+    // only by the superuser
+    if (me.can_select and me.real == null and !own and !u.disabled and (!u.superuser or me.superuser))
+        b.add("<button type=\"button\" data-action=\"userSelect\" data-id=\"{d}\" class=\"button button-default button-{s}\" title=\"See and use the panel as this user does.\">Select</button>", .{ u.id, size });
+    for (buttons) |x| if (x.show)
+        b.add("<a href=\"{s}\" class=\"button button-{s} button-{s}{s}\" title=\"{s}\">{s}</a>", .{ userUrl(x.path, u.id), x.class, size, sel(tab, x.tab), x.title, x.label });
+}
+
 fn status(b: *app.Buf, u: User) void {
     // Without the second step (a build for trying the panel) nobody sets it up
     if (u.disabled) content.label(b, "error", "Blocked") else if (!u.second_step and state.second_step) content.label(b, "warning", "Not signed in yet") else content.label(b, "success", "Active");
@@ -113,14 +154,14 @@ pub fn submitSearch(f: Form) void {
     const c = cargo();
     c.setStr("key", f.trimmed("key"));
     c.setInt("pn", 1);
-    router.go(c.makeUrl("/user", &cg_names));
+    browse("");
 }
 
 /// A page number under the list.
 pub fn goPage(f: Form) void {
     const c = cargo();
     c.readMap(f);
-    router.go(c.makeUrl("/user", &cg_names));
+    browse("");
 }
 
 /// A filter was changed: the list from its first page.
@@ -129,14 +170,21 @@ pub fn filter(f: Form) void {
     if (f.str("user-rid-select").len > 0) c.setInt("rid", f.int("user-rid-select"));
     if (f.str("user-stat-select").len > 0) c.setStr("stat", f.str("user-stat-select"));
     c.setInt("pn", 1);
-    router.go(c.makeUrl("/user", &cg_names));
+    browse("");
+}
+
+/// Clear: the list without its search word and filters.
+pub fn clearFilter(_: Form) void {
+    cargo().clear();
+    browse("");
 }
 
 pub fn browse(query: []const u8) void {
     if (!state.can("user", "browse")) return router.renderBadRequest();
     begin();
     const c = cargo();
-    c.read(query);
+    if (query.len > 0) c.read(query);
+    state.setExternalUrl(c.makeUrl("/user", &cg_names));
     const key = c.str("key");
     const filter_role = c.int("rid");
     const filter_status = c.str("stat");
@@ -164,7 +212,7 @@ pub fn browse(query: []const u8) void {
     stat_combo.add("new", "Not signed in yet");
     stat_combo.add("blocked", "Blocked");
     b.add("<form class=\"form-inline\"><div class=\"form-group\"><select id=\"user-stat-select\" class=\"form-control\" data-change=\"userFilter\">{s}</select></div></form>", .{stat_combo.format(filter_status)});
-    b.raw("<a href=\"#/user\" class=\"button button-default button-sm\" title=\"Reset all filters.\">Clear</a>");
+    b.raw("<button type=\"button\" data-action=\"userClear\" class=\"button button-default button-sm\" title=\"Reset all filters.\">Clear</button>");
     content.commandEnd(&b);
 
     content.contentStart(&b);
@@ -174,9 +222,9 @@ pub fn browse(query: []const u8) void {
     var shown: usize = 0;
     for (list) |u| {
         shown += 1;
-        b.raw("<tr><td>");
+        b.add("<tr><td><a href=\"{s}\">", .{userUrl("#/user/display", u.id)});
         content.find(&b, u.name, key);
-        b.raw("</td><td class=\"center\">");
+        b.raw("</a></td><td class=\"center\">");
         status(&b, u);
         b.raw("</td><td>");
         if (u.superuser) content.label(&b, "primary", "superuser");
@@ -185,22 +233,8 @@ pub fn browse(query: []const u8) void {
         terminalLabel(&b, u.terminal);
         b.raw("</td>");
         if (has_command) {
-            const own = std.mem.eql(u8, u.name, me.name);
             b.raw("<td class=\"right\"><div class=\"button-group-fixed\">");
-            // Act as the user: not oneself, not a blocked user, the
-            // superuser only by the superuser
-            if (can_select and !own and !u.disabled and (!u.superuser or me.superuser))
-                b.add("<button type=\"button\" data-action=\"userSelect\" data-id=\"{d}\" class=\"button button-default button-xs\" title=\"See and use the panel as this user does.\">Select</button>", .{u.id});
-            // Nobody changes the superuser
-            if (!u.superuser) {
-                if (state.can("user", "update")) b.add("<a href=\"{s}\" class=\"button button-default button-xs\" title=\"Edit record.\">Edit</a>", .{userUrl("#/user/update", u.id)});
-                if (state.can("user", "role_browse")) b.add("<a href=\"{s}\" class=\"button button-default button-xs\" title=\"Edit user roles.\">Roles</a>", .{userUrl("#/user/role", u.id)});
-                if (state.can("user", "update_pass")) b.add("<a href=\"{s}\" class=\"button button-default button-xs\" title=\"Give the user a new password.\">New Pass</a>", .{userUrl("#/user/update_pass", u.id)});
-            }
-            if (state.can("user", "access")) b.add("<a href=\"{s}\" class=\"button button-default button-xs\" title=\"Terminal access with tgterm.\">Terminal</a>", .{userUrl("#/user/terminal", u.id)});
-            if (!u.superuser) {
-                if (state.can("user", "delete") and !own) b.add("<a href=\"{s}\" class=\"button button-error button-xs\" title=\"Delete record.\">Delete</a>", .{userUrl("#/user/delete", u.id)});
-            }
+            toolbar(&b, u, "xs", .none);
             b.raw("</div></td>");
         }
         b.raw("</tr>");
@@ -213,6 +247,9 @@ pub fn browse(query: []const u8) void {
 }
 
 // --- Insert -------------------------------------------------------------------
+
+/// The user of the page shown
+var edit_id: i64 = 0;
 
 pub fn insert(_: []const u8) void {
     if (!state.can("user", "insert")) return router.renderBadRequest();
@@ -237,14 +274,16 @@ pub fn submitInsert(f: Form) void {
     const name = f.trimmed("user-name-input");
     const answer = fetch.post("user/insert", .{ .name = name }) orelse return renderInsert(name);
     if (fetch.refused()) return renderInsert(name);
-    const id = fetch.fieldAs(i64, answer, "id") orelse 0;
-    showPassword(name, fetch.fieldAs([]const u8, answer, "password") orelse "", id);
+    const password = fetch.fieldAs([]const u8, answer, "password") orelse "";
+    const u = userById(fetch.fieldAs(i64, answer, "id") orelse 0) orelse return;
+    showPassword(u, password, .none);
 }
 
 /// The new password, once; then the user's roles.
-fn showPassword(name: []const u8, password: []const u8, id: i64) void {
+fn showPassword(u: User, password: []const u8, tab: Tab) void {
+    const id = u.id;
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Users", "#/user" }, .{ name, "" }, .{ "Password", "" } });
+    recordHeader(&b, u, tab, "Password");
     content.contentStart(&b);
     b.raw("<p>Shown once. Hand it over yourself: termgate sends no e-mail. At the next sign-in the user sets up its second step (authenticator app).</p>");
     b.add("<p><strong id=\"user-password\">{f}</strong></p>", .{app.esc(password)});
@@ -252,32 +291,53 @@ fn showPassword(name: []const u8, password: []const u8, id: i64) void {
     content.commandStart(&b);
     b.add("<button type=\"button\" data-action=\"copy\" data-text=\"{f}\" class=\"button button-default button-sm\"><i class=\"fa fa-copy\"></i> Copy</button>", .{app.esc(password)});
     if (state.can("user", "role_browse")) b.add("<a href=\"{s}\" class=\"button button-primary button-sm\">Roles</a>", .{userUrl("#/user/role", id)});
-    b.raw("<a href=\"#/user\" class=\"button button-default button-sm\">Done</a>");
+    b.add("<a href=\"{s}\" class=\"button button-default button-sm\">Done</a>", .{userUrl("#/user/display", id)});
     content.commandEnd(&b);
     show(&b);
 }
 
-// --- Update -------------------------------------------------------------------
+// --- Info ---------------------------------------------------------------------
 
-var edit_id: i64 = 0;
+pub fn display(query: []const u8) void {
+    if (!state.can("user", "browse")) return router.renderBadRequest();
+    begin();
+    edit_id = readUserId(query);
+    const u = userById(edit_id) orelse return;
+    var b: app.Buf = .{};
+    recordHeader(&b, u, .info, "");
+    content.contentStart(&b);
+    b.add("<table><tbody><tr><th class=\"fixed-middle\">Name:</th><td>{f}</td></tr><tr><th>Status:</th><td>", .{app.esc(u.name)});
+    status(&b, u);
+    b.raw("</td></tr><tr><th>Roles:</th><td>");
+    if (u.superuser) content.label(&b, "primary", "superuser");
+    for (u.roles, 0..) |r, i| b.add("{s}{f}", .{ if (i > 0 or u.superuser) ", " else " ", app.esc(r.name) });
+    b.raw("</td></tr><tr><th>Terminal:</th><td>");
+    terminalLabel(&b, u.terminal);
+    b.add("</td></tr><tr><th>Added:</th><td>{s}</td></tr></tbody></table>", .{content.dateTime(u.created)});
+    content.contentEnd(&b);
+    show(&b);
+}
+
+// --- Update -------------------------------------------------------------------
 
 pub fn update(query: []const u8) void {
     if (!state.can("user", "update")) return router.renderBadRequest();
     begin();
     edit_id = readUserId(query);
     const u = userById(edit_id) orelse return;
-    renderUpdate(u.name, u.disabled, std.mem.eql(u8, u.name, state.user.?.name));
+    renderUpdate(u, u.name, u.disabled);
 }
 
-fn renderUpdate(name: []const u8, disabled: bool, own: bool) void {
+fn renderUpdate(u: User, name: []const u8, disabled: bool) void {
+    const own = std.mem.eql(u8, u.name, state.user.?.name);
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Users", "#/user" }, .{ "Edit Record", "" } });
+    recordHeader(&b, u, .edit, "Edit");
     content.contentStart(&b);
     b.raw("<form>");
     content.field(&b, "user-name-input", "Name:", name, .{ .required = true, .max = 32, .help = "Lowercase letters, digits, _ . -; starts with a letter." });
     // Nobody blocks themselves
     if (!own) content.checkbox(&b, "user-blocked-input", "Blocked: cannot sign in", disabled);
-    b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userUpdate\" class=\"button button-primary button-sm\">Submit</button> <a href=\"#/user\" class=\"button button-default button-sm\">Cancel</a></div></div>");
+    b.add("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userUpdate\" class=\"button button-primary button-sm\">Submit</button> <a href=\"{s}\" class=\"button button-default button-sm\">Cancel</a></div></div>", .{userUrl("#/user/display", u.id)});
     b.raw("</form>");
     content.contentEnd(&b);
     show(&b);
@@ -287,7 +347,7 @@ pub fn submitUpdate(f: Form) void {
     const name = f.trimmed("user-name-input");
     const blocked = f.checked("user-blocked-input");
     _ = fetch.post("user/update", .{ .id = edit_id, .name = name, .disabled = blocked }) orelse return;
-    if (fetch.refused()) return renderUpdate(name, blocked, !dom.exists("user-blocked-input"));
+    if (fetch.refused()) return renderUpdate(userById(edit_id) orelse return, name, blocked);
     // The name in the menu may be this user's
     login.reload();
     state.say("success", "Record has been changed.");
@@ -307,7 +367,7 @@ fn renderRoles() void {
     const u = userById(edit_id) orelse return;
     const all = roles();
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Users", "#/user" }, .{ u.name, "" }, .{ "Roles", "" } });
+    recordHeader(&b, u, .roles, "Roles");
     content.contentStart(&b);
     b.raw("<table><thead><tr><th>Role</th><th>Description</th>");
     const can_revoke = state.can("user", "role_revoke");
@@ -335,9 +395,6 @@ fn renderRoles() void {
         }
         b.raw("</select></div> <button type=\"button\" data-action=\"userRoleGrant\" class=\"button button-primary button-sm\">Grant</button></form></div></div>");
     }
-    content.commandStart(&b);
-    b.raw("<a href=\"#/user\" class=\"button button-default button-sm\">Back</a>");
-    content.commandEnd(&b);
     show(&b);
 }
 
@@ -372,12 +429,12 @@ pub fn updatePass(query: []const u8) void {
     edit_id = readUserId(query);
     const u = userById(edit_id) orelse return;
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Users", "#/user" }, .{ u.name, "" }, .{ "New Password", "" } });
+    recordHeader(&b, u, .new_pass, "New Password");
     content.contentStart(&b);
     b.add("<p>Give <strong>{f}</strong> a new password? Its sessions end, and it sets up the second step again at the next sign-in.</p>", .{app.esc(u.name)});
     content.contentEnd(&b);
     content.commandStart(&b);
-    b.raw("<button type=\"button\" data-action=\"userUpdatePass\" class=\"button button-warning button-sm\">Yes</button><a href=\"#/user\" class=\"button button-default button-sm\">Cancel</a>");
+    b.add("<button type=\"button\" data-action=\"userUpdatePass\" class=\"button button-warning button-sm\">Yes</button><a href=\"{s}\" class=\"button button-default button-sm\">Cancel</a>", .{userUrl("#/user/display", u.id)});
     content.commandEnd(&b);
     show(&b);
 }
@@ -388,7 +445,8 @@ pub fn submitUpdatePass(_: Form) void {
         state.keepMessages();
         return router.go("/user");
     }
-    showPassword(fetch.fieldAs([]const u8, answer, "name") orelse "", fetch.fieldAs([]const u8, answer, "password") orelse "", edit_id);
+    const password = fetch.fieldAs([]const u8, answer, "password") orelse "";
+    showPassword(userById(edit_id) orelse return, password, .new_pass);
 }
 
 // --- Delete -------------------------------------------------------------------
@@ -399,7 +457,7 @@ pub fn delete(query: []const u8) void {
     edit_id = readUserId(query);
     const u = userById(edit_id) orelse return;
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Users", "#/user" }, .{ "Delete Record", "" } });
+    recordHeader(&b, u, .delete, "Delete");
     content.contentStart(&b);
     b.raw("<p>Delete this user?</p><table><tbody>");
     b.add("<tr><th class=\"fixed-middle\">Name:</th><td>{f}</td></tr><tr><th>Status:</th><td>", .{app.esc(u.name)});
@@ -409,7 +467,7 @@ pub fn delete(query: []const u8) void {
     b.raw("</td></tr></tbody></table>");
     content.contentEnd(&b);
     content.commandStart(&b);
-    b.raw("<button type=\"button\" data-action=\"userDelete\" class=\"button button-error button-sm\">Yes</button><a href=\"#/user\" class=\"button button-default button-sm\">Cancel</a>");
+    b.add("<button type=\"button\" data-action=\"userDelete\" class=\"button button-error button-sm\">Yes</button><a href=\"{s}\" class=\"button button-default button-sm\">Cancel</a>", .{userUrl("#/user/display", u.id)});
     content.commandEnd(&b);
     show(&b);
 }
@@ -468,7 +526,7 @@ const Invite = struct { nodes: []const u8 = "", run_as: []const u8 = "", bot: bo
 fn renderTerminal(form: Invite) void {
     const u = userById(edit_id) orelse return;
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Users", "#/user" }, .{ u.name, "" }, .{ "Terminal", "" } });
+    recordHeader(&b, u, .terminal, "Terminal");
     content.contentStart(&b);
     b.raw("<p>Terminal access: this user connects to nodes with tgterm, like ssh. It also needs a role with the right terminal:connect (such as terminal_user).</p>");
     if (u.terminal) |t| {
@@ -497,7 +555,7 @@ fn renderTerminal(form: Invite) void {
     content.field(&b, "term-uses-input", "Sessions:", form.uses, .{ .max = 6, .help = "How many sessions; empty: no limit (then give days)." });
     content.field(&b, "term-days-input", "Days:", form.days, .{ .max = 4, .help = "Valid for this many days; empty: no end (then give sessions)." });
     content.checkbox(&b, "term-bot-input", "A bot (a program)", form.bot);
-    b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userTerminalInvite\" class=\"button button-primary button-sm\">Make invitation</button> <a href=\"#/user\" class=\"button button-default button-sm\">Back</a></div></div>");
+    b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userTerminalInvite\" class=\"button button-primary button-sm\">Make invitation</button></div></div>");
     b.raw("</form>");
     content.contentEnd(&b);
     content.show(&b);
@@ -535,7 +593,7 @@ pub fn submitTerminalInvite(f: Form) void {
     const u = userById(edit_id) orelse return;
     const command = std.fmt.allocPrint(app.arena(), "tgterm --invite {s}", .{code}) catch return;
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Users", "#/user" }, .{ u.name, "" }, .{ "Invitation", "" } });
+    recordHeader(&b, u, .terminal, "Invitation");
     content.contentStart(&b);
     b.add("<p>Shown once. Hand it to <strong>{f}</strong>: it runs this once, within 7 days, on its own machine; tgterm makes its key there. After that \"tgterm &lt;node&gt;\" is enough.</p>", .{app.esc(u.name)});
     b.add("<pre>{f}</pre>", .{app.esc(command)});

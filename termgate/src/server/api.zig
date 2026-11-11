@@ -91,9 +91,16 @@ pub fn init(auth: *auth_mod.Auth, a: std.mem.Allocator, token: ?[]const u8, now:
         try std.json.parseFromSliceLeaky(std.json.Value, a, me.body, .{})
     else
         .null;
+    // The settings the panel needs (our earlier project's config in init)
+    const settings = blk: {
+        auth.lock.lockUncancelable(auth.io);
+        defer auth.lock.unlock(auth.io);
+        break :blk try auth.db.settingsGet();
+    };
     return try std.json.Stringify.valueAlloc(a, .{
         .user = user,
         .second_step = auth.second_step,
+        .config = .{ .ruler_len = settings.ruler_len },
         .messages = &[_]Message{},
     }, .{});
 }

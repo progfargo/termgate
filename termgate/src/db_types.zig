@@ -61,6 +61,9 @@ pub const Settings = struct {
     max_session_minutes: i64 = 480,
     /// Session logs older than this many days are deleted; 0: kept
     log_days: i64 = 30,
+    /// Page numbers on each side of the current one under a list
+    /// (our earlier project's rulerLen), 2 to 10
+    ruler_len: i64 = 4,
 };
 
 /// Who signs in to the panel.

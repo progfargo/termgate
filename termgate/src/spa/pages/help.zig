@@ -4,6 +4,8 @@ const app = @import("../app.zig");
 const dom = @import("../dom.zig");
 const layout = @import("../layout.zig");
 const content = @import("../content.zig");
+const state = @import("../state.zig");
+const router = @import("../router.zig");
 
 const Topic = struct { title: []const u8, lines: []const []const u8 };
 
@@ -32,6 +34,7 @@ const topics = [_]Topic{
 };
 
 pub fn render(_: []const u8) void {
+    if (!state.can("help", "browse")) return router.renderBadRequest();
     dom.setBodyId("");
     layout.renderDefault("help");
     var b: app.Buf = .{};

@@ -252,7 +252,7 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
 }
 
 /// A node key lasts this long unless used
-const node_key_lifetime_s = 24 * 3600;
+const node_key_lifetime_s = 3600;
 /// An invitation lasts this long unless used
 const invitation_lifetime_s = 7 * 86400;
 

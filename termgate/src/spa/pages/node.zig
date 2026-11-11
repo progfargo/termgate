@@ -141,21 +141,22 @@ pub fn submitSearch(f: Form) void {
     const c = cargo();
     c.setStr("key", f.trimmed("key"));
     c.setInt("pn", 1);
-    router.go(c.makeUrl("/node", &cg_names));
+    browse("");
 }
 
 /// A page number under the list.
 pub fn goPage(f: Form) void {
     const c = cargo();
     c.readMap(f);
-    router.go(c.makeUrl("/node", &cg_names));
+    browse("");
 }
 
 pub fn browse(query: []const u8) void {
     if (!state.can("node", "browse")) return router.renderBadRequest();
     begin();
     const c = cargo();
-    c.read(query);
+    if (query.len > 0) c.read(query);
+    state.setExternalUrl(c.makeUrl("/node", &cg_names));
     const key = c.str("key");
     content.search("nodeSearch", key);
     // Fresh system info from the online nodes, for the next look
@@ -205,8 +206,20 @@ pub fn browse(query: []const u8) void {
 }
 
 /// The buttons for a node, by its state and the user's rights.
+/// The pages of a node; the button of the one shown is selected.
+const Tab = enum { none, info, new_key, delete };
+
 fn commands(b: *app.Buf, n: Node, size: []const u8) void {
-    b.add("<a href=\"{s}\" class=\"button button-default button-{s}\">Info</a>", .{ nodeUrl("#/node/display", n.id), size });
+    toolbar(b, n, size, .none);
+}
+
+fn toolbar(b: *app.Buf, n: Node, size: []const u8, tab: Tab) void {
+    const sel = struct {
+        fn f(t: Tab, want: Tab) []const u8 {
+            return if (t == want) " selected" else "";
+        }
+    }.f;
+    b.add("<a href=\"{s}\" class=\"button button-default button-{s}{s}\">Info</a>", .{ nodeUrl("#/node/display", n.id), size, sel(tab, .info) });
     const is = struct {
         fn f(x: Node, s: []const u8) bool {
             return std.mem.eql(u8, x.state, s);
@@ -217,12 +230,26 @@ fn commands(b: *app.Buf, n: Node, size: []const u8) void {
         b.add("<button type=\"button\" data-action=\"nodeReject\" data-id=\"{d}\" class=\"button button-default button-{s}\">Reject</button>", .{ n.id, size });
     }
     if (state.can("node", "insert") and (is(n, "waiting") or is(n, "pending")))
-        b.add("<button type=\"button\" data-action=\"nodeNewKey\" data-id=\"{d}\" class=\"button button-default button-{s}\">New Key</button>", .{ n.id, size });
+        b.add("<a href=\"{s}\" class=\"button button-default button-{s}{s}\">New Key</a>", .{ nodeUrl("#/node/new_key", n.id), size, sel(tab, .new_key) });
     if (state.can("node", "update") and (is(n, "approved") or is(n, "disabled"))) {
         const off = is(n, "disabled");
         b.add("<button type=\"button\" data-action=\"nodeSetDisabled\" data-id=\"{d}\" data-off=\"{s}\" data-name=\"{f}\" class=\"button button-{s} button-{s}\">{s}</button>", .{ n.id, if (off) "0" else "1", app.esc(n.name), if (off) "default" else "warning", size, if (off) "Enable" else "Disable" });
     }
-    if (state.can("node", "delete")) b.add("<a href=\"{s}\" class=\"button button-error button-{s}\">Delete</a>", .{ nodeUrl("#/node/delete", n.id), size });
+    if (state.can("node", "delete")) b.add("<a href=\"{s}\" class=\"button button-error button-{s}{s}\">Delete</a>", .{ nodeUrl("#/node/delete", n.id), size, sel(tab, .delete) });
+}
+
+/// A node's page: the path back (Nodes, the node's Info) and its toolbar.
+fn recordHeader(b: *app.Buf, n: Node, tab: Tab) void {
+    const info = nodeUrl("#/node/display", n.id);
+    switch (tab) {
+        .info, .none => content.header(b, &.{ .{ "Nodes", "#/node" }, .{ n.name, "" } }),
+        .new_key => content.header(b, &.{ .{ "Nodes", "#/node" }, .{ n.name, info }, .{ "New Key", "" } }),
+        .delete => content.header(b, &.{ .{ "Nodes", "#/node" }, .{ n.name, info }, .{ "Delete", "" } }),
+    }
+    content.commandStart(b);
+    toolbar(b, n, "sm", tab);
+    if (tab == .info and n.online) b.add("<button type=\"button\" data-action=\"nodeRefresh\" data-name=\"{f}\" class=\"button button-default button-sm\"><i class=\"fas fa-rotate fa-fw\"></i> Refresh</button>", .{app.esc(n.name)});
+    content.commandEnd(b);
 }
 
 // --- Insert and the node key ------------------------------------------------------
@@ -240,8 +267,8 @@ fn renderInsert(name: []const u8, description: []const u8) void {
     b.raw("<form>");
     content.field(&b, "node-name-input", "Name:", name, .{ .required = true, .max = 63, .help = "Lowercase letters, digits and _, starting with a letter: ist_kadikoy_gw01" });
     content.field(&b, "node-desc-input", "Description:", description, .{ .max = 255, .help = "Where it is, what it does (optional)." });
-    b.raw("<p>termgate makes a node key; it is used once, on the device, within a day.</p>");
-    b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"nodeInsert\" class=\"button button-primary button-sm\">Submit</button> <a href=\"#/node\" class=\"button button-default button-sm\">Cancel</a></div></div>");
+    b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"nodeInsert\" class=\"button button-primary button-sm\">Submit</button> <a href=\"#/node\" class=\"button button-default button-sm\">Cancel</a></div>");
+    b.raw("<span class=\"help-block\">termgate makes a node key; it is used once, on the device, within an hour.</span></div>");
     b.raw("</form>");
     content.contentEnd(&b);
     content.show(&b);
@@ -252,7 +279,24 @@ pub fn submitInsert(f: Form) void {
     const description = f.trimmed("node-desc-input");
     const answer = fetch.post("node/insert", .{ .name = name, .description = description }) orelse return;
     if (fetch.refused()) return renderInsert(name, description);
-    showKey(name, fetch.fieldAs(Key, answer, "data") orelse return);
+    const key = fetch.fieldAs(Key, answer, "data") orelse return;
+    const n = nodeById(key.id) orelse return;
+    showKey(n, key);
+}
+
+/// A node's New Key page: a new node key replaces the one before.
+pub fn newKeyPage(query: []const u8) void {
+    if (!state.can("node", "insert")) return router.renderBadRequest();
+    begin();
+    const n = nodeById(readNodeId(query)) orelse return;
+    var b: app.Buf = .{};
+    recordHeader(&b, n, .new_key);
+    content.contentStart(&b);
+    b.raw("<form><div class=\"form-group form-command\"><div class=\"button-group-fixed\">");
+    b.add("<button type=\"button\" data-action=\"nodeNewKey\" data-id=\"{d}\" class=\"button button-primary button-sm\">Submit</button> <a href=\"{s}\" class=\"button button-default button-sm\">Cancel</a></div>", .{ n.id, nodeUrl("#/node/display", n.id) });
+    b.raw("<span class=\"help-block\">A new node key replaces the one before; it is used once, on the device, within an hour.</span></div></form>");
+    content.contentEnd(&b);
+    content.show(&b);
 }
 
 pub fn newKey(f: Form) void {
@@ -261,26 +305,26 @@ pub fn newKey(f: Form) void {
     const answer = fetch.post("node/new_key", .{ .id = id }) orelse return;
     if (fetch.refused()) {
         state.keepMessages();
-        return router.go("/node");
+        return router.go(dom.hash());
     }
     begin();
-    showKey(n.name, fetch.fieldAs(Key, answer, "data") orelse return);
+    showKey(n, fetch.fieldAs(Key, answer, "data") orelse return);
 }
 
 /// The node key, once, with the command for the device.
-const Key = struct { code: []const u8 };
+const Key = struct { id: i64, code: []const u8 };
 
-fn showKey(name: []const u8, key: Key) void {
+fn showKey(n: Node, key: Key) void {
     const command = std.fmt.allocPrint(app.arena(), "tgnode --registration {s}", .{key.code}) catch return;
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Nodes", "#/node" }, .{ name, "" }, .{ "Node Key", "" } });
+    recordHeader(&b, n, .new_key);
     content.contentStart(&b);
-    b.raw("<p>Run this once on the device, within a day. The device then asks to be approved here.</p>");
+    b.raw("<p>Run this once on the device, within an hour. The device then asks to be approved here.</p>");
     b.add("<pre>{f}</pre>", .{app.esc(command)});
     content.contentEnd(&b);
     content.commandStart(&b);
     b.add("<button type=\"button\" data-action=\"copy\" data-text=\"{f}\" class=\"button button-default button-sm\"><i class=\"fa fa-copy\"></i> Copy</button>", .{app.esc(command)});
-    b.raw("<a href=\"#/node\" class=\"button button-default button-sm\">Done</a>");
+    b.add("<a href=\"{s}\" class=\"button button-default button-sm\">Done</a>", .{nodeUrl("#/node/display", n.id)});
     content.commandEnd(&b);
     content.show(&b);
 }
@@ -318,11 +362,7 @@ pub fn display(query: []const u8) void {
     const id = readNodeId(query);
     const n = nodeById(id) orelse return;
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Nodes", "#/node" }, .{ n.name, "" } });
-    content.commandStart(&b);
-    commands(&b, n, "sm");
-    if (n.online) b.add("<button type=\"button\" data-action=\"nodeRefresh\" data-name=\"{f}\" class=\"button button-default button-sm\"><i class=\"fas fa-rotate fa-fw\"></i> Refresh</button>", .{app.esc(n.name)});
-    content.commandEnd(&b);
+    recordHeader(&b, n, .info);
     content.contentStart(&b);
     b.raw("<table><tbody>");
     b.add("<tr><th class=\"fixed-middle\">Name:</th><td>{f}</td></tr><tr><th>Description:</th><td>{f}</td></tr><tr><th>State:</th><td>", .{ app.esc(n.name), app.esc(n.description) });
@@ -372,7 +412,7 @@ pub fn delete(query: []const u8) void {
     delete_id = readNodeId(query);
     const n = nodeById(delete_id) orelse return;
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Nodes", "#/node" }, .{ "Delete Record", "" } });
+    recordHeader(&b, n, .delete);
     content.contentStart(&b);
     b.raw("<p>Delete this node? It is disconnected at once and has to register again to come back.</p><table><tbody>");
     b.add("<tr><th class=\"fixed-middle\">Name:</th><td>{f}</td></tr><tr><th>Description:</th><td>{f}</td></tr><tr><th>State:</th><td>", .{ app.esc(n.name), app.esc(n.description) });
@@ -380,7 +420,7 @@ pub fn delete(query: []const u8) void {
     b.raw("</td></tr></tbody></table>");
     content.contentEnd(&b);
     content.commandStart(&b);
-    b.add("<button type=\"button\" data-action=\"nodeDelete\" data-name=\"{f}\" class=\"button button-error button-sm\">Yes</button><a href=\"#/node\" class=\"button button-default button-sm\">Cancel</a>", .{app.esc(n.name)});
+    b.add("<button type=\"button\" data-action=\"nodeDelete\" data-name=\"{f}\" class=\"button button-error button-sm\">Yes</button><a href=\"{s}\" class=\"button button-default button-sm\">Cancel</a>", .{ app.esc(n.name), nodeUrl("#/node/display", n.id) });
     content.commandEnd(&b);
     content.show(&b);
 }

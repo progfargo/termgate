@@ -64,6 +64,39 @@ fn changeable(r: Role) bool {
     return !std.mem.eql(u8, r.name, "admin") or (state.user != null and state.user.?.superuser);
 }
 
+/// The pages of a role; the button of the one shown is selected.
+const Tab = enum { none, info, edit, rights, delete };
+
+/// A role's page: the path back (Roles, the role's Info), then `title`,
+/// and its toolbar.
+fn recordHeader(b: *app.Buf, r: Role, tab: Tab, title: []const u8) void {
+    if (tab == .info) {
+        content.header(b, &.{ .{ "Roles", "#/role" }, .{ r.name, "" } });
+    } else content.header(b, &.{ .{ "Roles", "#/role" }, .{ r.name, roleUrl("#/role/display", r.id) }, .{ title, "" } });
+    content.commandStart(b);
+    toolbar(b, r, "sm", tab);
+    content.commandEnd(b);
+}
+
+/// A role's buttons, by the user's rights and the rules (only the
+/// superuser changes the role admin, which is never deleted).
+fn toolbar(b: *app.Buf, r: Role, size: []const u8, tab: Tab) void {
+    const sel = struct {
+        fn f(t: Tab, want: Tab) []const u8 {
+            return if (t == want) " selected" else "";
+        }
+    }.f;
+    const Btn = struct { tab: Tab, path: []const u8, label: []const u8, show: bool, class: []const u8 = "default" };
+    const buttons = [_]Btn{
+        .{ .tab = .info, .path = "#/role/display", .label = "Info", .show = true },
+        .{ .tab = .edit, .path = "#/role/update", .label = "Edit", .show = changeable(r) and state.can("role", "update") },
+        .{ .tab = .rights, .path = "#/role/right", .label = "Role Rights", .show = changeable(r) and state.can("role", "role_right") },
+        .{ .tab = .delete, .path = "#/role/delete", .label = "Delete", .show = !std.mem.eql(u8, r.name, "admin") and state.can("role", "delete"), .class = "error" },
+    };
+    for (buttons) |x| if (x.show)
+        b.add("<a href=\"{s}\" class=\"button button-{s} button-{s}{s}\">{s}</a>", .{ roleUrl(x.path, r.id), x.class, size, sel(tab, x.tab), x.label });
+}
+
 fn begin() void {
     dom.setBodyId("");
     layout.renderDefault("role");
@@ -93,14 +126,10 @@ pub fn browse(_: []const u8) void {
     b.raw("</tr></thead><tbody>");
     if (list.len == 0) b.raw("<tr><td colspan=\"4\">Empty list.</td></tr>");
     for (list) |r| {
-        b.add("<tr><td>{f}</td><td>{f}</td><td>{d}</td>", .{ app.esc(r.name), app.esc(r.description), r.user_count });
+        b.add("<tr><td><a href=\"{s}\">{f}</a></td><td>{f}</td><td>{d}</td>", .{ roleUrl("#/role/display", r.id), app.esc(r.name), app.esc(r.description), r.user_count });
         if (has_command) {
             b.raw("<td class=\"right\"><div class=\"button-group-fixed\">");
-            if (changeable(r)) {
-                if (can_update) b.add("<a href=\"{s}\" class=\"button button-default button-xs\">Edit</a>", .{roleUrl("#/role/update", r.id)});
-                if (can_right) b.add("<a href=\"{s}\" class=\"button button-default button-xs\">Role Rights</a>", .{roleUrl("#/role/right", r.id)});
-            }
-            if (can_delete and !std.mem.eql(u8, r.name, "admin")) b.add("<a href=\"{s}\" class=\"button button-error button-xs\">Delete</a>", .{roleUrl("#/role/delete", r.id)});
+            toolbar(&b, r, "xs", .none);
             b.raw("</div></td>");
         }
         b.raw("</tr>");
@@ -110,15 +139,33 @@ pub fn browse(_: []const u8) void {
     content.show(&b);
 }
 
-// --- Insert and update ----------------------------------------------------------
+// --- Info ---------------------------------------------------------------------
 
+/// The role of the page shown
 var edit_id: i64 = 0;
+
+pub fn display(query: []const u8) void {
+    if (!state.can("role", "browse")) return router.renderBadRequest();
+    begin();
+    edit_id = readRoleId(query);
+    const r = get(edit_id) orelse return;
+    var b: app.Buf = .{};
+    recordHeader(&b, r.role, .info, "");
+    content.contentStart(&b);
+    b.add("<table><tbody><tr><th class=\"fixed-middle\">Role Name:</th><td>{f}</td></tr><tr><th>Explanation:</th><td>{f}</td></tr><tr><th>Users:</th><td>{d}</td></tr><tr><th>Rights:</th><td>", .{ app.esc(r.role.name), app.esc(r.role.description), r.role.user_count });
+    for (rights.modules) |m| for (m.actions) |ac| if (rights.has(r.rights, m.name, ac.name)) b.add("{s}:{s} ", .{ m.name, ac.name });
+    b.raw("</td></tr></tbody></table>");
+    content.contentEnd(&b);
+    content.show(&b);
+}
+
+// --- Insert and update ----------------------------------------------------------
 
 pub fn insert(_: []const u8) void {
     if (!state.can("role", "insert")) return router.renderBadRequest();
     begin();
     edit_id = 0;
-    renderForm("", "");
+    renderForm(null, "", "");
 }
 
 pub fn update(query: []const u8) void {
@@ -126,17 +173,18 @@ pub fn update(query: []const u8) void {
     begin();
     edit_id = readRoleId(query);
     const r = get(edit_id) orelse return;
-    renderForm(r.role.name, r.role.description);
+    renderForm(r.role, r.role.name, r.role.description);
 }
 
-fn renderForm(name: []const u8, description: []const u8) void {
+/// New (`r` null) or Edit
+fn renderForm(r: ?Role, name: []const u8, description: []const u8) void {
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Roles", "#/role" }, .{ if (edit_id == 0) "New Record" else "Edit Record", "" } });
+    if (r) |x| recordHeader(&b, x, .edit, "Edit") else content.header(&b, &.{ .{ "Roles", "#/role" }, .{ "New Record", "" } });
     content.contentStart(&b);
     b.raw("<form>");
     content.field(&b, "role-name-input", "Role Name:", name, .{ .required = true, .max = 32, .help = "Letters, digits, _ and -; starts with a letter." });
     content.field(&b, "role-exp-input", "Explanation:", description, .{ .max = 255 });
-    b.add("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"{s}\" class=\"button button-primary button-sm\">Submit</button> <a href=\"#/role\" class=\"button button-default button-sm\">Cancel</a></div></div>", .{if (edit_id == 0) "roleInsert" else "roleUpdate"});
+    b.add("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"{s}\" class=\"button button-primary button-sm\">Submit</button> <a href=\"{s}\" class=\"button button-default button-sm\">Cancel</a></div></div>", .{ if (r == null) "roleInsert" else "roleUpdate", if (r) |x| roleUrl("#/role/display", x.id) else "#/role" });
     b.raw("</form>");
     content.contentEnd(&b);
     content.show(&b);
@@ -146,7 +194,7 @@ pub fn submitInsert(f: Form) void {
     const name = f.trimmed("role-name-input");
     const description = f.trimmed("role-exp-input");
     const answer = fetch.post("role/insert", .{ .name = name, .description = description }) orelse return;
-    if (fetch.refused()) return renderForm(name, description);
+    if (fetch.refused()) return renderForm(null, name, description);
     state.say("success", "Record has been saved.");
     // Its rights next, for who may set them
     const id = fetch.fieldAs(i64, answer, "id") orelse 0;
@@ -159,7 +207,7 @@ pub fn submitUpdate(f: Form) void {
     const description = f.trimmed("role-exp-input");
     // Without rights: they stay as they are
     _ = fetch.post("role/update", .{ .id = edit_id, .name = name, .description = description }) orelse return;
-    if (fetch.refused()) return renderForm(name, description);
+    if (fetch.refused()) return renderForm((get(edit_id) orelse return).role, name, description);
     state.say("success", "Record has been changed.");
     router.go("/role");
 }
@@ -173,7 +221,7 @@ pub fn right(query: []const u8) void {
     const r = get(edit_id) orelse return;
     if (!changeable(r.role)) return router.renderBadRequest();
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Roles", "#/role" }, .{ r.role.name, "" }, .{ "Role Rights", "" } });
+    recordHeader(&b, r.role, .rights, "Role Rights");
     content.contentStart(&b);
     b.raw("<form>");
     for (rights.modules) |m| {
@@ -186,7 +234,7 @@ pub fn right(query: []const u8) void {
         }
         b.raw("</tbody></table>");
     }
-    b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"roleRightUpdate\" class=\"button button-primary button-sm\">Submit</button> <a href=\"#/role\" class=\"button button-default button-sm\">Cancel</a></div></div>");
+    b.add("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"roleRightUpdate\" class=\"button button-primary button-sm\">Submit</button> <a href=\"{s}\" class=\"button button-default button-sm\">Cancel</a></div></div>", .{roleUrl("#/role/display", r.role.id)});
     b.raw("</form>");
     content.contentEnd(&b);
     content.show(&b);
@@ -209,14 +257,14 @@ pub fn delete(query: []const u8) void {
     edit_id = readRoleId(query);
     const r = get(edit_id) orelse return;
     var b: app.Buf = .{};
-    content.header(&b, &.{ .{ "Roles", "#/role" }, .{ "Delete Record", "" } });
+    recordHeader(&b, r.role, .delete, "Delete");
     content.contentStart(&b);
     b.raw("<p>Delete this role?</p><table><tbody>");
     b.add("<tr><th class=\"fixed-middle\">Role Name:</th><td>{f}</td></tr><tr><th>Explanation:</th><td>{f}</td></tr><tr><th>Users:</th><td>{d}</td></tr>", .{ app.esc(r.role.name), app.esc(r.role.description), r.role.user_count });
     b.raw("</tbody></table>");
     content.contentEnd(&b);
     content.commandStart(&b);
-    b.raw("<button type=\"button\" data-action=\"roleDelete\" class=\"button button-error button-sm\">Yes</button><a href=\"#/role\" class=\"button button-default button-sm\">Cancel</a>");
+    b.add("<button type=\"button\" data-action=\"roleDelete\" class=\"button button-error button-sm\">Yes</button><a href=\"{s}\" class=\"button button-default button-sm\">Cancel</a>", .{roleUrl("#/role/display", r.role.id)});
     content.commandEnd(&b);
     content.show(&b);
 }

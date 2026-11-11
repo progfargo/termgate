@@ -34,16 +34,19 @@ const routes = [_]router.Route{
     .{ .path = "/user/role", .handler = user.role },
     .{ .path = "/user/update_pass", .handler = user.updatePass },
     .{ .path = "/user/delete", .handler = user.delete },
+    .{ .path = "/user/display", .handler = user.display },
     .{ .path = "/user/terminal", .handler = user.terminal },
     .{ .path = "/role", .handler = role.browse },
     .{ .path = "/role/insert", .handler = role.insert },
     .{ .path = "/role/update", .handler = role.update },
     .{ .path = "/role/right", .handler = role.right },
     .{ .path = "/role/delete", .handler = role.delete },
+    .{ .path = "/role/display", .handler = role.display },
     .{ .path = "/node", .handler = node.browse },
     .{ .path = "/node/insert", .handler = node.insert },
     .{ .path = "/node/display", .handler = node.display },
     .{ .path = "/node/delete", .handler = node.delete },
+    .{ .path = "/node/new_key", .handler = node.newKeyPage },
     .{ .path = "/session", .handler = session.browse },
     .{ .path = "/session/log", .handler = session.log },
     .{ .path = "/session/watch", .handler = watch.render },
@@ -63,6 +66,7 @@ const actions = [_]Action{
     .{ .name = "loginBack", .run = login.back },
     .{ .name = "logout", .run = login.logout },
     .{ .name = "copy", .run = user.copy },
+    .{ .name = "copyUrl", .run = copyUrl },
     .{ .name = "nodeSearch", .run = node.submitSearch },
     .{ .name = "nodeGoPage", .run = node.goPage },
     .{ .name = "sessionSearch", .run = session.submitSearch },
@@ -72,6 +76,7 @@ const actions = [_]Action{
     .{ .name = "userSearch", .run = user.submitSearch },
     .{ .name = "userGoPage", .run = user.goPage },
     .{ .name = "userFilter", .run = user.filter },
+    .{ .name = "userClear", .run = user.clearFilter },
     .{ .name = "userInsert", .run = user.submitInsert },
     .{ .name = "userUpdate", .run = user.submitUpdate },
     .{ .name = "userRoleGrant", .run = user.submitRoleGrant },
@@ -98,6 +103,11 @@ const actions = [_]Action{
     .{ .name = "configUpdate", .run = config.submit },
 };
 
+/// The page title's link button
+fn copyUrl(_: Form) void {
+    dom.copyUrl(state.external_url);
+}
+
 /// The top menu's Sign out and the user info's unselect are links (as
 /// our earlier project's #/logout and #/user/unselect)
 fn logoutRoute(_: []const u8) void {
@@ -118,9 +128,10 @@ fn home() []const u8 {
         .{ "/role", "role", "browse" },
         .{ "/config", "config", "browse" },
         .{ "/profile", "profile", "browse" },
+        .{ "/help", "help", "browse" },
     };
     for (pages) |p| if (state.can(p[1], p[2])) return p[0];
-    return "/help";
+    return "/profile";
 }
 
 fn onSignedOut() void {

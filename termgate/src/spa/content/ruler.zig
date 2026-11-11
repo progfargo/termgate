@@ -4,13 +4,13 @@
 
 const std = @import("std");
 const app = @import("../app.zig");
-
-/// How many numbers on each side of the current page (our earlier project's
-/// rulerLen, 4 by default)
-const ruler_len = 4;
+const state = @import("../state.zig");
 
 pub fn render(b: *app.Buf, total_pages: i64, page_no: i64, action: []const u8) void {
     if (total_pages < 2) return;
+
+    // How many numbers on each side of the current page (Configuration)
+    const ruler_len = state.ruler_len;
 
     var start = page_no - ruler_len;
     if (start < 1) start = 1;

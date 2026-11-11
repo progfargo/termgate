@@ -59,6 +59,8 @@ pub const modules = [_]Module{
         .{ .name = "update_password", .title = "Change own password" },
     } },
     .{ .name = "config", .title = "Configuration", .actions = &.{ browse, update } },
+    // The Help page and its menu item, as in our earlier project
+    .{ .name = "help", .title = "Help", .actions = &.{browse} },
     // Opening terminal sessions on nodes with tgterm (the user's terminal
     // access says which nodes and as whom)
     .{ .name = "terminal", .title = "Terminal", .actions = &.{.{ .name = "connect", .title = "Connect to nodes" }} },

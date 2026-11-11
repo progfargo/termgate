@@ -13,11 +13,15 @@ pub const Options = struct {
     tgnode: []const u8,
     /// The folder tgnode works in (node.json is there)
     dir: []const u8,
+    /// The user it runs as; null: root. A session can do what this user can.
+    user: ?[]const u8 = null,
 };
 
 /// The unit file. No sandboxing: a session is a shell on the device, with
-/// what the user tgnode runs as (root, as a system service) may do.
+/// what the user tgnode runs as (root unless `user` is given) may do.
 pub fn unit(gpa: std.mem.Allocator, o: Options) ![]u8 {
+    const user_line = if (o.user) |u| try std.fmt.allocPrint(gpa, "User={s}\n", .{u}) else try gpa.dupe(u8, "");
+    defer gpa.free(user_line);
     return std.fmt.allocPrint(gpa,
         \\# tgnode, installed by "tgnode service"
         \\[Unit]
@@ -27,14 +31,14 @@ pub fn unit(gpa: std.mem.Allocator, o: Options) ![]u8 {
         \\
         \\[Service]
         \\WorkingDirectory={s}
-        \\ExecStart={s} run
+        \\{s}ExecStart={s} run
         \\Restart=always
         \\RestartSec=5
         \\
         \\[Install]
         \\WantedBy=multi-user.target
         \\
-    , .{ o.dir, o.tgnode });
+    , .{ o.dir, user_line, o.tgnode });
 }
 
 /// Writes the unit and enables and starts it. Needs root.
@@ -63,4 +67,8 @@ test "unit runs tgnode in its folder" {
     try std.testing.expect(std.mem.indexOf(u8, u, "WorkingDirectory=/opt/tgnode\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, u, "ExecStart=/opt/tgnode/tgnode run\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, u, "Restart=always\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, u, "User=") == null);
+    const with_user = try unit(a, .{ .tgnode = "/opt/tgnode/tgnode", .dir = "/opt/tgnode", .user = "operator" });
+    defer a.free(with_user);
+    try std.testing.expect(std.mem.indexOf(u8, with_user, "User=operator\nExecStart=") != null);
 }

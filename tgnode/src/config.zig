@@ -22,6 +22,10 @@ pub const Config = struct {
     ca_pem: []const u8 = "",
     /// termgate's issuer key ("A..."): approvals must be signed by it
     issuer: []const u8,
+    /// The node's public key at registration, from the hardware as the
+    /// user who registered it reads it (some hardware facts are root's
+    /// only). The service must run as a user who reads the same key.
+    hardware_key: []const u8 = "",
 };
 
 pub fn load(gpa: std.mem.Allocator, io: Io, path: []const u8) !std.json.Parsed(Config) {

@@ -164,6 +164,7 @@ pub fn call(p: *Panel, a: std.mem.Allocator, name: []const u8, body: []const u8,
         return .{ .body = "{\"ok\":null}" };
     }
     if (std.mem.eql(u8, name, "relay.info")) {
+        if (!who.can("config", "browse")) return err(.forbidden, "no right");
         return .{ .body = try std.json.Stringify.valueAlloc(a, .{ .ok = .{
             .host = p.relay_host,
             .port = p.relay_port,

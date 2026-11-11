@@ -334,7 +334,8 @@ fn renderUpdate(u: User, name: []const u8, disabled: bool, nodes: []const u8) vo
     content.field(&b, "user-name-input", "Name:", name, .{ .required = true, .max = 32, .help = "Lowercase letters, digits, _ . -; starts with a letter." });
     // Nobody blocks themselves
     if (!own) content.checkbox(&b, "user-blocked-input", "Blocked: cannot sign in", disabled);
-    content.field(&b, "user-nodes-input", "Nodes:", nodes, .{ .max = 255, .help = "The nodes this user may reach with tgterm: names or patterns, comma separated: ist_*, pump?? (* any, ? one character). Empty: none." });
+    // A user's nodes are its terminal access, given with user:access
+    if (state.can("user", "access")) content.field(&b, "user-nodes-input", "Nodes:", nodes, .{ .max = 255, .help = "The nodes this user may reach with tgterm: names or patterns, comma separated: ist_*, pump?? (* any, ? one character). Empty: none." });
     b.add("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userUpdate\" class=\"button button-primary button-sm\">Submit</button> <a href=\"{s}\" class=\"button button-default button-sm\">Cancel</a></div></div>", .{userUrl("#/user/display", u.id)});
     b.raw("</form>");
     content.contentEnd(&b);
@@ -347,7 +348,8 @@ pub fn submitUpdate(f: Form) void {
     // "ist_*, pump??": the patterns without spaces
     var nodes: std.ArrayList(u8) = .empty;
     for (f.trimmed("user-nodes-input")) |ch| if (ch != ' ') nodes.append(app.arena(), ch) catch {};
-    _ = fetch.post("user/update", .{ .id = edit_id, .name = name, .disabled = blocked, .nodes = nodes.items }) orelse return;
+    const send_nodes: ?[]const u8 = if (state.can("user", "access")) nodes.items else null;
+    _ = fetch.post("user/update", .{ .id = edit_id, .name = name, .disabled = blocked, .nodes = send_nodes }) orelse return;
     if (fetch.refused()) return renderUpdate(userById(edit_id) orelse return, name, blocked, nodes.items);
     // The name in the menu may be this user's
     login.reload();

@@ -79,6 +79,22 @@ fn now(io: Io) i64 {
     return @intCast(@divFloor(Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_s));
 }
 
+/// The data folder and the database: readable by termgate's user only.
+fn restrictData(arena: std.mem.Allocator, home: []const u8) void {
+    for ([_][]const u8{ "", "/keys", "/relay-kit" }) |sub| {
+        const path = std.fmt.allocPrintSentinel(arena, "{s}{s}", .{ home, sub }, 0) catch continue;
+        _ = std.c.chmod(path, 0o700);
+    }
+    for ([_][]const u8{ "termgate.db", "termgate.db-wal", "termgate.db-shm", "ca.pem" }) |name| {
+        const path = std.fmt.allocPrintSentinel(arena, "{s}/{s}", .{ home, name }, 0) catch continue;
+        _ = std.c.chmod(path, 0o600);
+    }
+}
+
+fn isLoopback(host: []const u8) bool {
+    return std.mem.eql(u8, host, "127.0.0.1") or std.mem.eql(u8, host, "localhost") or std.mem.eql(u8, host, "::1");
+}
+
 /// "host" or "host:port"
 fn splitHostPort(text: []const u8, default_port: u16) ?struct { host: []const u8, port: u16 } {
     const i = std.mem.lastIndexOfScalar(u8, text, ':') orelse return .{ .host = text, .port = default_port };
@@ -95,6 +111,9 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("{s}", .{usage});
         std.process.exit(2);
     };
+    // Everything termgate writes (database, keys, relay kit) is for its own
+    // user only
+    _ = std.c.umask(0o077);
     // termgate's data: ./data in the folder termgate is started in
     var cwd_buf: [Io.Dir.max_path_bytes]u8 = undefined;
     const work_dir = cwd_buf[0..try std.process.currentPath(io, &cwd_buf)];
@@ -169,7 +188,9 @@ pub fn main(init: std.process.Init) !void {
         relay_task.cancel(io);
     }
 
-    // Configuration, keys and data
+    // Configuration, keys and data, for termgate's user only (also in a
+    // folder made before termgate did so)
+    restrictData(arena, o.home);
     const cfg_path = try std.fs.path.join(arena, &.{ o.home, "relay.json" });
     var loaded = service_mod.loadConfig(gpa, io, cfg_path) catch |e| fail("cannot read {s}: {s} (run termgate init first)", .{ cfg_path, @errorName(e) });
     defer loaded.deinit();
@@ -185,6 +206,10 @@ pub fn main(init: std.process.Init) !void {
     const web_dir = try std.fs.path.join(arena, &.{ self_dir, "..", "web" });
     const l = splitHostPort(o.listen, 8080) orelse fail("invalid --listen", .{});
     var auth: auth_mod.Auth = .{ .gpa = gpa, .io = io, .db = &db, .lock = &db_lock };
+    // Without the second step (a debug build) the panel is for this
+    // machine only
+    if (!auth.second_step and !isLoopback(l.host))
+        fail("this build signs in without the second step (a debug build): it listens on 127.0.0.1 or localhost only; build with -Doptimize=ReleaseSafe for a server", .{});
     var panel: panel_mod.Panel = .{
         .gpa = gpa,
         .io = io,

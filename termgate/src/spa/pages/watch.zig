@@ -39,6 +39,7 @@ fn cargo() *CargoList {
         cg.addStr("sid", "");
         cg.addStr("node", "");
         cg.addStr("userKey", "");
+        cg.addStr("user", "");
         cg_ready = true;
     }
     return &cg;
@@ -54,14 +55,16 @@ pub fn render(query: []const u8) void {
     const sid = c.str("sid");
     const node = c.str("node");
     const key = c.str("userKey");
+    const user = c.str("user");
     var b: app.Buf = .{};
     content.header(&b, &.{ .{ "Sessions", "#/session" }, .{ std.fmt.allocPrint(app.arena(), "Watch: {s}", .{node}) catch "Watch", "" } });
     content.commandStart(&b);
     b.raw("<a href=\"#/session\" class=\"button button-default button-sm\">Back</a>");
     if (state.can("session", "end")) b.add("<button type=\"button\" data-action=\"sessionEnd\" id=\"watch-end\" data-sid=\"{s}\" data-node=\"{f}\" data-key=\"{f}\" class=\"button button-error button-sm\" title=\"Ends the user's session on the node; leaving this page only stops watching.\">End session</button>", .{ sid, app.esc(node), app.esc(key) });
-    b.raw("<span id=\"watch-state\">connecting</span>");
     content.commandEnd(&b);
-    b.raw("<div class=\"row row-content\"><div class=\"col\"><div class=\"terminal\" id=\"watch-screen\"></div></div></div>");
+    // Who is connected where, and the state of watching
+    b.add("<div class=\"row row-content\"><div class=\"col\"><p>{f} on {f} <span id=\"watch-state\"><span class=\"label label-default\">connecting</span></span></p>", .{ app.esc(if (user.len > 0) user else "a user"), app.esc(node) });
+    b.raw("<div class=\"terminal\" id=\"watch-screen\"></div></div></div>");
     content.show(&b);
 
     const answer = fetch.post("session/watch_start", .{ node, key, sid }) orelse return;
@@ -132,8 +135,15 @@ fn stateName(s: []const u8) []const u8 {
 }
 
 fn showState(w: *Watch) void {
-    const text = if (std.mem.eql(u8, w.state, "live")) "live" else if (std.mem.eql(u8, w.state, "ended")) "the session has ended" else if (std.mem.eql(u8, w.state, "unreadable")) "the session's output cannot be read" else if (std.mem.eql(u8, w.state, "failed")) "watching failed" else "connecting";
-    dom.setHtml("watch-state", text);
+    const is = struct {
+        fn f(x: *Watch, s: []const u8) bool {
+            return std.mem.eql(u8, x.state, s);
+        }
+    }.f;
+    const label: [2][]const u8 = if (is(w, "live")) .{ "success", "live" } else if (is(w, "ended")) .{ "default", "ended" } else if (is(w, "unreadable")) .{ "warning", "output cannot be read" } else if (is(w, "failed")) .{ "error", "watching failed" } else .{ "default", "connecting" };
+    var b: app.Buf = .{};
+    content.label(&b, label[0], label[1]);
+    dom.setHtml("watch-state", b.str());
     // An ended session cannot be ended again
     if (std.mem.eql(u8, w.state, "ended")) dom.addClass("watch-end", "hidden");
 }

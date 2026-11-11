@@ -357,6 +357,9 @@ fn userCall(auth: *Auth, a: std.mem.Allocator, name: []const u8, body: []const u
         if (req.disabled and target.id == c.id) return fail(a, .conflict, "you cannot block your own user");
         if (req.nodes) |n| {
             const nodes = std.mem.trim(u8, n, " ");
+            // A user's nodes are its terminal access: giving it is a right of
+            // its own
+            if (!std.mem.eql(u8, target.nodes, nodes) and !c.can("user", "access")) return fail(a, .forbidden, no_right);
             if (!std.mem.eql(u8, target.nodes, nodes)) db.userSetNodes(target.id, nodes) catch |e| switch (e) {
                 error.InvalidSpec => return fail(a, .bad_request, "nodes: name patterns, comma separated: lowercase letters, digits, _, * (any run) and ? (one character)"),
                 else => return userError(a, e),
@@ -667,6 +670,17 @@ test "sign in with two steps; users, roles and rights" {
     try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "roles.update", try std.mem.concat(a, u8, &.{ ed_body, ",\"rights\":[]}" }), vt, now)).?.status);
     try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "roles.update", try std.mem.concat(a, u8, &.{ ed_body, "}" }), vt, now)).?.status);
     try testing.expectEqual(@as(usize, 3), (try db.roleRights(a, editor)).len);
+    // A user's nodes are terminal access: user:update alone does not change them
+    const clerk = try db.roleInsert("clerk", "Edits users", &.{ "panel:login", "user:browse", "user:update" });
+    try db.userGrant(veli, clerk);
+    const ali = try db.userCreate("ali", false, "!", 1);
+    const ali_nodes = try std.fmt.allocPrint(a, "{{\"id\":{d},\"name\":\"ali\",\"disabled\":false,\"nodes\":\"ist_*\"}}", .{ali});
+    try testing.expectEqual(std.http.Status.forbidden, (try call(&auth, a, "users.update", ali_nodes, vt, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.update", try std.fmt.allocPrint(a, "{{\"id\":{d},\"name\":\"ali\",\"disabled\":false}}", .{ali}), vt, now)).?.status);
+    try testing.expectEqual(std.http.Status.ok, (try call(&auth, a, "users.update", ali_nodes, et, now)).?.status);
+    try testing.expectEqualStrings("ist_*", (try db.userGet(a, ali)).?.nodes);
+    try db.userRevoke(veli, clerk);
+
     // Acting as another user: veli's rights apply, the audit names both
     const vid = try std.fmt.allocPrint(a, "{{\"id\":{d}}}", .{veli});
     // Only the superuser, not an admin

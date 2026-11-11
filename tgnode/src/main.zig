@@ -7,8 +7,9 @@
 //!   tgnode id                 print this node's public key (from the hardware)
 //!   tgnode status             print the system info sent to termgate
 //!   tgnode run                serve sessions
-//!   tgnode service            install and start the systemd service that
-//!                             runs "tgnode run" in this folder (root)
+//!   tgnode service [--user U] install and start the systemd service that
+//!                             runs "tgnode run" in this folder (as root,
+//!                             or as user U; installing needs root)
 //!   tgnode --node-key <node key>
 //!                             first run: register with termgate, store the
 //!                             config once the admin approves, then serve
@@ -32,8 +33,9 @@ const usage =
     \\  id                 print this node's public key
     \\  status             print the system info sent to termgate
     \\  run                serve sessions
-    \\  service            install and start the systemd service (root):
-    \\                     "tgnode run" in this folder, at boot and after a stop
+    \\  service [--user U] install and start the systemd service (needs root):
+    \\                     "tgnode run" in this folder, at boot and after a stop,
+    \\                     as root or as user U (who must have registered the node)
     \\  --node-key <node key>
     \\                     first run: register with termgate, then serve
     \\
@@ -65,12 +67,14 @@ pub fn main(init: std.process.Init) !void {
         try out.flush();
         return;
     }
-    if (args.len == 2 and std.mem.eql(u8, args[1], "service")) {
+    const service_user: ?[]const u8 = if (args.len == 4 and std.mem.eql(u8, args[2], "--user")) args[3] else null;
+    if (args.len >= 2 and std.mem.eql(u8, args[1], "service") and (args.len == 2 or service_user != null)) {
         // Only a registered node: its node.json in this folder
-        _ = std.Io.Dir.cwd().statFile(io, config.file_name, .{}) catch {
-            std.debug.print("tgnode: no {s} here; register first: tgnode --node-key <node key>\n", .{config.file_name});
+        const cfg = config.load(init.gpa, io, config.file_name) catch {
+            std.debug.print("tgnode: no valid {s} here; register first: tgnode --node-key <node key>\n", .{config.file_name});
             std.process.exit(1);
         };
+        defer cfg.deinit();
         var self_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const self_n = std.process.executablePath(io, &self_buf) catch 0;
         var dir_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -79,14 +83,33 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("tgnode: cannot find its own path or this folder\n", .{});
             std.process.exit(1);
         }
-        systemd.install(init.gpa, io, .{ .tgnode = self_buf[0..self_n], .dir = dir_buf[0..dir_n] }) catch |e| {
+        const self_path = self_buf[0..self_n];
+        // The service's user must read the hardware key the node was
+        // registered with (some hardware facts are root's only)
+        const service_key = keyOf(init.gpa, io, self_path, service_user) catch |e| {
+            std.debug.print("tgnode: cannot read the node's key as {s}: {s}\n", .{ service_user orelse "root", @errorName(e) });
+            std.process.exit(1);
+        };
+        if (cfg.value.hardware_key.len == 0) {
+            std.debug.print("tgnode: {s} has no hardware key (registered by an older tgnode); not checked\n", .{config.file_name});
+        } else if (!std.mem.eql(u8, &service_key, cfg.value.hardware_key)) {
+            std.debug.print(
+                \\tgnode: as {s} this device reads another key than the one it was registered with;
+                \\termgate would not know it. Register and run the service as the same user:
+                \\  sudo -u <user> tgnode --node-key <node key>   then   sudo tgnode service --user <user>
+                \\  (or both as root: tgnode --node-key <node key>, then tgnode service)
+                \\
+            , .{service_user orelse "root"});
+            std.process.exit(1);
+        }
+        systemd.install(init.gpa, io, .{ .tgnode = self_path, .dir = dir_buf[0..dir_n], .user = service_user }) catch |e| {
             std.debug.print("tgnode: {s}\n", .{switch (e) {
                 error.AccessDenied => "permission denied: run as root",
                 else => @errorName(e),
             }});
             std.process.exit(1);
         };
-        std.debug.print("tgnode: service installed and started ({s}); see: systemctl status tgnode\n", .{systemd.unit_path});
+        std.debug.print("tgnode: service installed and started as {s} ({s}); see: systemctl status tgnode\n", .{ service_user orelse "root", systemd.unit_path });
         return;
     }
     if (args.len == 2 and std.mem.eql(u8, args[1], "run")) {
@@ -120,6 +143,25 @@ pub fn main(init: std.process.Init) !void {
     }
     std.debug.print("{s}", .{usage});
     std.process.exit(2);
+}
+
+/// The hardware key as `user` reads it: this process's own (root), or
+/// "tgnode id" run as that user.
+fn keyOf(gpa: std.mem.Allocator, io: std.Io, self_path: []const u8, user: ?[]const u8) ![56]u8 {
+    var out: [56]u8 = undefined;
+    if (user) |u| {
+        const r = try std.process.run(gpa, io, .{ .argv = &.{ "runuser", "-u", u, "--", self_path, "id" } });
+        defer gpa.free(r.stdout);
+        defer gpa.free(r.stderr);
+        const text = std.mem.trim(u8, r.stdout, " \r\n");
+        if (!r.term.success() or text.len != out.len) return error.NoKey;
+        @memcpy(&out, text);
+        return out;
+    }
+    var root = try std.Io.Dir.openDirAbsolute(io, "/", .{});
+    defer root.close(io);
+    const kp = try hwkey.keyPair(gpa, io, root);
+    return kp.publicKey().encode();
 }
 
 test {

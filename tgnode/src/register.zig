@@ -130,5 +130,6 @@ fn attempt(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, code: core.
         .relay_port = code.port,
         .ca_pem = try arena.dupe(u8, ca_pem),
         .issuer = try arena.dupe(u8, issuer),
+        .hardware_key = try arena.dupe(u8, &kpub),
     };
 }

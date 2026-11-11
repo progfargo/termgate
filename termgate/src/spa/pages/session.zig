@@ -36,7 +36,7 @@ pub fn table(b: *app.Buf, sessions: []const Session, open: bool) void {
     b.raw("<th class=\"right\">Command</th></tr></thead><tbody>");
     if (sessions.len == 0) b.add("<tr><td colspan=\"{d}\">{s}</td></tr>", .{ @as(u8, if (open) 4 else 5), if (open) "No open sessions." else "Empty list." });
     for (sessions) |s| {
-        b.add("<tr><td>{f}</td><td>{f}</td><td>{s}</td>", .{ app.esc(s.node), app.esc(s.person), content.dateTime(s.started) });
+        b.add("<tr><td>{f}</td><td>{f}</td><td>{s}</td>", .{ app.esc(s.node), app.esc(s.user), content.dateTime(s.started) });
         if (!open) {
             b.add("<td>{s}", .{if (s.ended) |e| content.dateTime(e) else "open"});
             if (s.exit_status) |x| b.add(" <small>(exit {d})</small>", .{x});

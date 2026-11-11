@@ -48,7 +48,8 @@ pub const Session = struct {
     sid: []const u8,
     node: []const u8 = "",
     user_key: []const u8 = "",
-    person: []const u8 = "",
+    /// The user's name
+    user: []const u8 = "",
     started: i64 = 0,
     ended: ?i64 = null,
     exit_status: ?i64 = null,
@@ -291,7 +292,7 @@ pub fn display(query: []const u8) void {
         content.contentStart(&b);
         b.raw("<table><thead><tr><th>Who</th><th>Started</th><th>Ended</th></tr></thead><tbody>");
         if (sessions.len == 0) b.raw("<tr><td colspan=\"3\">No sessions yet.</td></tr>");
-        for (sessions) |s| b.add("<tr><td>{f}</td><td>{s}</td><td>{s}</td></tr>", .{ app.esc(s.person), content.dateTime(s.started), if (s.ended) |e| content.dateTime(e) else "open" });
+        for (sessions) |s| b.add("<tr><td>{f}</td><td>{s}</td><td>{s}</td></tr>", .{ app.esc(s.user), content.dateTime(s.started), if (s.ended) |e| content.dateTime(e) else "open" });
         b.raw("</tbody></table>");
         content.contentEnd(&b);
     }

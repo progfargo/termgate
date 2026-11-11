@@ -229,11 +229,10 @@ pub const Db = struct {
         );
         // The grants termgate issued, with their uses
         if (!try db.has("select 1 from sqlite_master where type = 'table' and name = 'grantRecord'")) try db.exec(grant_record_table);
-        // Databases from before one kind of user: people become users
-        if (try db.has("select 1 from sqlite_master where type = 'table' and name = 'person'")) try db.migratePeople();
         // Version 1: signing in to the panel and connecting to nodes are
-        // rights. Before, every user could sign in: every role gets
-        // panel:login, and a role terminal_user gives terminal:connect.
+        // rights. Before, every user could sign in: every role there is
+        // gets panel:login (first, so that terminal_user, made next, does
+        // not), and a role terminal_user gives terminal:connect.
         if (first_roles) {
             try db.exec("PRAGMA user_version = 1");
         } else if (try db.version() < 1) {
@@ -241,6 +240,8 @@ pub const Db = struct {
             try db.seedTerminalRole();
             try db.exec("PRAGMA user_version = 1");
         }
+        // Databases from before one kind of user: people become users
+        if (try db.has("select 1 from sqlite_master where type = 'table' and name = 'person'")) try db.migratePeople();
         // What panel users did: every changing call and every sign-in
         try db.exec(
             \\CREATE TABLE IF NOT EXISTS action (
@@ -1859,7 +1860,20 @@ test "people of an older database become users" {
     try db.exec("insert into person(personId, name, kind, userKey, nodes, runAs, maxUses, created) values(7, 'Veli Kaya', 'human', 'UVELI', 'ist_*', 'root', 5, 1), (8, 'Veli Kaya', 'bot', null, '*', 'bot', 1, 2)");
     try db.exec("insert into grantRecord(jti, personId, token, maxUses, uses) values('J7', 7, 'g', 5, 3)");
     _ = try db.userCreate("veli_kaya", false, "h", 1);
+    // A database from before version 1: no terminal_user, no panel:login
+    try db.exec("PRAGMA user_version = 0");
+    try db.exec("delete from role where name = 'terminal_user'");
+    try db.exec("delete from roleRight where module = 'panel'");
     try db.initSchema();
+    // Existing roles may sign in; terminal_user only connects
+    try testing.expect(rights.has(try db.roleRights(a, 1), "panel", "login"));
+    var tu: i64 = 0;
+    for (try db.roleList(a)) |r| if (std.mem.eql(u8, r.name, "terminal_user")) {
+        tu = r.id;
+    };
+    const tu_rights = try db.roleRights(a, tu);
+    try testing.expectEqual(@as(usize, 1), tu_rights.len);
+    try testing.expectEqualStrings("terminal:connect", tu_rights[0]);
     // Named as user names go, unique; the access and its grant kept
     const t = (try db.terminalByKey(a, "UVELI")).?;
     try testing.expectEqualStrings("veli_kaya_2", t.name);

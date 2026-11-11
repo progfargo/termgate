@@ -19,7 +19,20 @@ const login = @import("login.zig");
 const Form = @import("../form.zig").Form;
 
 const RoleRef = struct { id: i64, name: []const u8 };
-const User = struct { id: i64, name: []const u8, superuser: bool = false, disabled: bool = false, second_step: bool = false, created: i64 = 0, roles: []const RoleRef = &.{} };
+/// A user's terminal access (tgterm)
+const Terminal = struct {
+    kind: []const u8 = "human",
+    user_key: ?[]const u8 = null,
+    nodes: []const u8 = "",
+    run_as: []const u8 = "",
+    max_uses: ?i64 = null,
+    grant_exp: ?i64 = null,
+    revoked: bool = false,
+    created: i64 = 0,
+    token_expires: ?i64 = null,
+    uses: ?i64 = null,
+};
+const User = struct { id: i64, name: []const u8, superuser: bool = false, disabled: bool = false, second_step: bool = false, created: i64 = 0, roles: []const RoleRef = &.{}, terminal: ?Terminal = null };
 const Role = struct { id: i64, name: []const u8, description: []const u8 = "", user_count: i64 = 0 };
 
 fn users() ?[]const User {
@@ -73,7 +86,7 @@ pub fn browse(query: []const u8) void {
     const all_roles = if (state.can("user", "role_browse")) roles() else &.{};
     const me = state.user.?;
     const can_select = me.can_select and me.real == null;
-    const has_command = can_select or state.can("user", "update") or state.can("user", "role_browse") or state.can("user", "update_pass") or state.can("user", "delete");
+    const has_command = can_select or state.can("user", "update") or state.can("user", "role_browse") or state.can("user", "update_pass") or state.can("user", "access") or state.can("user", "delete");
 
     var b: app.Buf = .{};
     content.header(&b, &.{.{ "Users", "" }});
@@ -93,7 +106,7 @@ pub fn browse(query: []const u8) void {
     content.commandEnd(&b);
 
     content.contentStart(&b);
-    b.raw("<table><thead><tr><th>Name</th><th>Status</th><th>Roles</th><th>Created</th>");
+    b.raw("<table><thead><tr><th>Name</th><th>Status</th><th>Roles</th><th>Terminal</th><th>Created</th>");
     if (has_command) b.raw("<th class=\"right\">Command</th>");
     b.raw("</tr></thead><tbody>");
     var shown: usize = 0;
@@ -105,6 +118,8 @@ pub fn browse(query: []const u8) void {
         b.raw("</td><td>");
         if (u.superuser) content.label(&b, "primary", "superuser");
         for (u.roles, 0..) |r, i| b.add("{s}{f}", .{ if (i > 0 or u.superuser) ", " else " ", app.esc(r.name) });
+        b.raw("</td><td>");
+        terminalLabel(&b, u.terminal);
         b.add("</td><td>{s}</td>", .{content.dateTime(u.created)});
         if (has_command) {
             const own = std.mem.eql(u8, u.name, me.name);
@@ -118,13 +133,16 @@ pub fn browse(query: []const u8) void {
                 if (state.can("user", "update")) b.add("<a href=\"#/user/update?userId={d}\" class=\"button button-default button-xs\" title=\"Edit record.\">Edit</a>", .{u.id});
                 if (state.can("user", "role_browse")) b.add("<a href=\"#/user/role?userId={d}\" class=\"button button-default button-xs\" title=\"Edit user roles.\">Roles</a>", .{u.id});
                 if (state.can("user", "update_pass")) b.add("<a href=\"#/user/update_pass?userId={d}\" class=\"button button-default button-xs\" title=\"Give the user a new password.\">New Pass</a>", .{u.id});
+            }
+            if (state.can("user", "access")) b.add("<a href=\"#/user/terminal?userId={d}\" class=\"button button-default button-xs\" title=\"Terminal access with tgterm.\">Terminal</a>", .{u.id});
+            if (!u.superuser) {
                 if (state.can("user", "delete") and !own) b.add("<a href=\"#/user/delete?userId={d}\" class=\"button button-error button-xs\" title=\"Delete record.\">Delete</a>", .{u.id});
             }
             b.raw("</div></td>");
         }
         b.raw("</tr>");
     }
-    if (shown == 0) b.add("<tr><td colspan=\"{d}\">Empty list.</td></tr>", .{@as(u8, if (has_command) 5 else 4)});
+    if (shown == 0) b.add("<tr><td colspan=\"{d}\">Empty list.</td></tr>", .{@as(u8, if (has_command) 6 else 5)});
     b.raw("</tbody></table>");
     content.contentEnd(&b);
     show(&b);
@@ -387,6 +405,114 @@ fn actingChanged(text: []const u8) void {
     state.say("success", text);
     layout.reset();
     router.go("/");
+}
+
+// --- Terminal access ----------------------------------------------------------------
+
+/// The state of a user's terminal access, as a label.
+fn terminalLabel(b: *app.Buf, t: ?Terminal) void {
+    const x = t orelse return b.raw("-");
+    if (x.revoked) return content.label(b, "error", "revoked");
+    if (x.user_key != null) return content.label(b, "success", if (std.mem.eql(u8, x.kind, "bot")) "active (bot)" else "active");
+    if (x.token_expires) |e| if (e <= app.now()) return content.label(b, "warning", "invitation expired");
+    content.label(b, "primary", "invited");
+}
+
+pub fn terminal(query: []const u8) void {
+    if (!state.can("user", "access")) return router.renderBadRequest();
+    begin();
+    edit_id = app.queryInt(query, "userId");
+    renderTerminal(.{});
+}
+
+const Invite = struct { nodes: []const u8 = "", run_as: []const u8 = "", bot: bool = false, uses: []const u8 = "", days: []const u8 = "" };
+
+fn renderTerminal(form: Invite) void {
+    const u = userById(edit_id) orelse return;
+    var b: app.Buf = .{};
+    content.header(&b, &.{ .{ "Users", "#/user" }, .{ u.name, "" }, .{ "Terminal", "" } });
+    content.contentStart(&b);
+    b.raw("<p>Terminal access: this user connects to nodes with tgterm, like ssh. It also needs a role with the right terminal:connect (such as terminal_user).</p>");
+    if (u.terminal) |t| {
+        b.raw("<table><tbody><tr><th class=\"fixed-middle\">State:</th><td>");
+        terminalLabel(&b, t);
+        b.add("</td></tr><tr><th>Nodes:</th><td>{f}</td></tr><tr><th>As Unix user:</th><td>{f}</td></tr>", .{ app.esc(t.nodes), app.esc(t.run_as) });
+        b.add("<tr><th>Sessions:</th><td>{d} used", .{t.uses orelse 0});
+        if (t.max_uses) |m| b.add(" of {d}", .{m});
+        b.raw("</td></tr>");
+        if (t.grant_exp) |e| b.add("<tr><th>Until:</th><td>{s} UTC</td></tr>", .{content.dateTime(e)});
+        if (t.user_key) |k| b.add("<tr><th>Key:</th><td><small>{f}</small></td></tr>", .{app.esc(k)});
+        b.raw("</tbody></table>");
+    } else b.raw("<p>No terminal access given yet.</p>");
+    content.contentEnd(&b);
+    if (u.terminal) |t| if (!t.revoked) {
+        content.commandStart(&b);
+        b.raw("<button type=\"button\" data-action=\"userTerminalRevoke\" class=\"button button-error button-sm\">Revoke</button>");
+        content.commandEnd(&b);
+    };
+    // A new invitation (replaces what the user had)
+    b.raw("<div class=\"row row-header\"><div class=\"col\"><div class=\"page-title\"><h3>Give terminal access</h3></div></div></div>");
+    content.contentStart(&b);
+    b.raw("<form>");
+    content.field(&b, "term-nodes-input", "Nodes:", form.nodes, .{ .required = true, .max = 255, .help = "Node names or patterns, comma separated: ist_*, pump?? (* any, ? one character)." });
+    content.field(&b, "term-runas-input", "As Unix user:", form.run_as, .{ .required = true, .max = 32, .help = "The account on the node the session runs as." });
+    content.field(&b, "term-uses-input", "Sessions:", form.uses, .{ .max = 6, .help = "How many sessions; empty: no limit (then give days)." });
+    content.field(&b, "term-days-input", "Days:", form.days, .{ .max = 4, .help = "Valid for this many days; empty: no end (then give sessions)." });
+    content.checkbox(&b, "term-bot-input", "A bot (a program, not a person)", form.bot);
+    b.raw("<div class=\"form-group form-command\"><div class=\"button-group-fixed\"><button type=\"button\" data-action=\"userTerminalInvite\" class=\"button button-primary button-sm\">Make invitation</button> <a href=\"#/user\" class=\"button button-default button-sm\">Back</a></div></div>");
+    b.raw("</form>");
+    content.contentEnd(&b);
+    content.show(&b);
+}
+
+pub fn submitTerminalInvite(f: Form) void {
+    const form: Invite = .{ .nodes = f.trimmed("term-nodes-input"), .run_as = f.trimmed("term-runas-input"), .bot = f.checked("term-bot-input"), .uses = f.trimmed("term-uses-input"), .days = f.trimmed("term-days-input") };
+    const number = struct {
+        fn get(text: []const u8) error{Invalid}!?u32 {
+            if (text.len == 0) return null;
+            const n = std.fmt.parseInt(u32, text, 10) catch return error.Invalid;
+            return if (n == 0) error.Invalid else n;
+        }
+    }.get;
+    const uses = number(form.uses) catch {
+        state.say("warning", "Sessions is a whole number above 0, or empty.");
+        return renderTerminal(form);
+    };
+    const days = number(form.days) catch {
+        state.say("warning", "Days is a whole number above 0, or empty.");
+        return renderTerminal(form);
+    };
+    var nodes: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, form.nodes, ',');
+    while (it.next()) |p| {
+        const t = std.mem.trim(u8, p, " ");
+        if (t.len > 0) nodes.append(app.arena(), t) catch {};
+    }
+    const answer = fetch.post("user/terminal_invite", .{ .id = edit_id, .nodes = nodes.items, .run_as = form.run_as, .bot = form.bot, .uses = uses, .days = days }) orelse return;
+    if (fetch.refused()) {
+        state.keepMessages();
+        return renderTerminal(form);
+    }
+    const code = (fetch.fieldAs(struct { code: []const u8 }, answer, "data") orelse return).code;
+    const u = userById(edit_id) orelse return;
+    const command = std.fmt.allocPrint(app.arena(), "tgterm --invite {s}", .{code}) catch return;
+    var b: app.Buf = .{};
+    content.header(&b, &.{ .{ "Users", "#/user" }, .{ u.name, "" }, .{ "Invitation", "" } });
+    content.contentStart(&b);
+    b.add("<p>Shown once. Hand it to <strong>{f}</strong>: it runs this once, within 7 days, on its own machine; tgterm makes its key there. After that \"tgterm &lt;node&gt;\" is enough.</p>", .{app.esc(u.name)});
+    b.add("<pre class=\"code\">{f}</pre>", .{app.esc(command)});
+    content.contentEnd(&b);
+    content.commandStart(&b);
+    b.add("<button type=\"button\" data-action=\"copy\" data-text=\"{f}\" class=\"button button-default button-sm\"><i class=\"fa fa-copy\"></i> Copy</button>", .{app.esc(command)});
+    b.add("<a href=\"#/user/terminal?userId={d}\" class=\"button button-default button-sm\">Done</a>", .{edit_id});
+    content.commandEnd(&b);
+    content.show(&b);
+}
+
+pub fn submitTerminalRevoke(_: Form) void {
+    _ = fetch.post("user/terminal_revoke", .{ .id = edit_id }) orelse return;
+    if (fetch.refused()) state.keepMessages() else state.say("success", "Terminal access has been revoked; its connections are closed.");
+    renderTerminal(.{});
 }
 
 /// The Copy button of a shown password

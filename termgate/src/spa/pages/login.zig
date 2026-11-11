@@ -12,9 +12,11 @@ const layout = @import("../layout.zig");
 const router = @import("../router.zig");
 const Form = @import("../form.zig").Form;
 
-/// The setup key of a first sign-in, kept between the two steps
+/// The setup key of a first sign-in, kept between the two steps, and the
+/// same as a QR code (SVG, made by the server)
 var setup_key: [64]u8 = undefined;
 var setup_key_len: usize = 0;
+var setup_qr: std.ArrayList(u8) = .empty;
 
 pub fn render(_: []const u8) void {
     if (state.signedIn()) return dom.setHash("/");
@@ -54,7 +56,10 @@ fn renderCode() void {
     card(&b);
     b.raw("<form>");
     if (setup_key_len > 0) {
-        b.raw("<p>First sign-in: set up the second step. Add an entry named termgate to your authenticator app (Google Authenticator or another) with this key:</p>");
+        b.raw("<p>First sign-in: set up the second step. Scan this code with your authenticator app (Google Authenticator or another):</p>");
+        // The server's SVG: only squares, nothing from the user
+        if (setup_qr.items.len > 0) b.add("<div class=\"setup-qr\" style=\"width:200px;height:200px\">{s}</div>", .{setup_qr.items});
+        b.raw("<p>Or add an entry named termgate with this key:</p>");
         b.add("<p><strong>{f}</strong></p>", .{app.esc(setup_key[0..setup_key_len])});
         b.raw("<p>Then enter the code the app shows.</p>");
     }
@@ -79,6 +84,10 @@ pub fn submit(f: Form) void {
         const key = fetch.fieldAs([]const u8, answer, "secret") orelse "";
         setup_key_len = @min(key.len, setup_key.len);
         @memcpy(setup_key[0..setup_key_len], key[0..setup_key_len]);
+        const svg = fetch.fieldAs([]const u8, answer, "qr") orelse "";
+        setup_qr.clearRetainingCapacity();
+        // Only an SVG of the server's own
+        if (std.mem.startsWith(u8, svg, "<svg ")) setup_qr.appendSlice(app.gpa, svg) catch {};
     }
     renderCode();
 }

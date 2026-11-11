@@ -216,7 +216,7 @@ fn call(state: *State, req: *std.http.Server.Request, a: std.mem.Allocator, name
         // Sign-ins are recorded too, the failed ones with the name tried
         if (std.mem.eql(u8, name, "login") and r.status != .ok) panel_mod.record(state.panel, now, "", name, signInName(a, body), false);
         // Built without the second step, the password alone signs in
-        if (std.mem.eql(u8, name, "login") and r.status == .ok and !auth_mod.second_step) panel_mod.record(state.panel, now, signInName(a, body), "login", "signed in (no second step)", true);
+        if (std.mem.eql(u8, name, "login") and r.status == .ok and !state.auth.second_step) panel_mod.record(state.panel, now, signInName(a, body), "login", "signed in (no second step)", true);
         if (std.mem.eql(u8, name, "login2")) {
             const signed = if (r.status == .ok) (try auth_mod.caller(state.auth, a, token, now)) else null;
             panel_mod.record(state.panel, now, if (signed) |s| s.name else "", "login", if (r.status == .ok) "signed in" else "wrong code", r.status == .ok);

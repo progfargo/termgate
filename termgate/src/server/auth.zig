@@ -30,8 +30,7 @@ const std = @import("std");
 const Io = std.Io;
 const dbm = @import("db");
 const users = @import("users");
-/// false: built with -Dsecond-step=false, the password alone signs in
-pub const second_step = @import("build_options").second_step;
+const qr = @import("qr.zig");
 
 /// A pending session (password given, code not yet) lives this long.
 const pending_s = 5 * 60;
@@ -44,6 +43,9 @@ pub const Auth = struct {
     db: *dbm.Db,
     lock: *Io.Mutex,
     cost: users.Cost = users.default_cost,
+    /// Signing in asks for the authenticator code too: on in a release
+    /// build, off in a debug build (build.zig)
+    second_step: bool = @import("build_options").second_step,
 };
 
 pub const Reply = struct {
@@ -203,7 +205,7 @@ fn login(auth: *Auth, a: std.mem.Allocator, body: []const u8, now: i64) !Reply {
     auth.lock.lockUncancelable(auth.io);
     defer auth.lock.unlock(auth.io);
     try auth.db.webSessionCreate(&users.tokenHash(token), acc.id, now, now + pending_s);
-    if (!second_step) {
+    if (!auth.second_step) {
         // Built without the second step: signed in with the password
         try auth.db.userPasswordOk(acc.id);
         try auth.db.webSessionPromote(&users.tokenHash(token), now + session_s);
@@ -219,7 +221,13 @@ fn login(auth: *Auth, a: std.mem.Allocator, body: []const u8, now: i64) !Reply {
     const secret = users.newTotpSecret(auth.io);
     try auth.db.userSetTotpSecret(acc.id, secret);
     return .{
-        .body = try json(a, .{ .step = "setup", .secret = @as([]const u8, &users.totpSecretText(secret)), .uri = try users.totpUri(a, secret, acc.name) }),
+        .body = try json(a, .{
+            .step = "setup",
+            .secret = @as([]const u8, &users.totpSecretText(secret)),
+            .uri = try users.totpUri(a, secret, acc.name),
+            // The same as a QR code to scan
+            .qr = qr.svg(a, try users.totpUri(a, secret, acc.name)) catch "",
+        }),
         .set_token = token,
         .token_max_age = pending_s,
     };
@@ -500,7 +508,7 @@ test "sign in with two steps; users, roles and rights" {
     defer db.close();
     db.setLogKey(testing.io, @splat(7));
     var lock: Io.Mutex = .init;
-    var auth: Auth = .{ .gpa = testing.allocator, .io = testing.io, .db = &db, .lock = &lock, .cost = users.test_cost };
+    var auth: Auth = .{ .gpa = testing.allocator, .io = testing.io, .db = &db, .lock = &lock, .cost = users.test_cost, .second_step = true };
     var now: i64 = 1_794_000_000;
 
     const pw = (try firstSuperuser(&auth, "superuser", now)).?;

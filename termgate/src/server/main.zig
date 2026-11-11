@@ -198,7 +198,7 @@ pub fn main(init: std.process.Init) !void {
     var web = http.listen(&state, l.host, l.port) catch |e| fail("cannot listen on {s}: {s}", .{ o.listen, @errorName(e) });
     defer web.stop();
     log.info("web panel on http://{s}:{d} (files: {s})", .{ l.host, l.port, web_dir });
-    if (!auth_mod.second_step) log.warn("built with -Dsecond-step=false: the panel signs in with the password alone, no authenticator code", .{});
+    if (!auth.second_step) log.warn("a debug build: the panel signs in with the name and password alone; a release build asks for the authenticator code too", .{});
 
     // termgate on the relay, for ever: a lost connection is made again
     var service: ?*service_mod.Service = null;
@@ -248,6 +248,7 @@ test {
     _ = @import("auth.zig");
     _ = @import("rpc.zig");
     _ = @import("api.zig");
+    _ = @import("qr.zig");
     _ = panel_mod;
 }
 

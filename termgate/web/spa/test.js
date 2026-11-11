@@ -74,11 +74,16 @@
     fill("login-input", "superuser");
     fill("password-input", q.get("password"));
     await click("[data-action=login]");
-    await wait("the second step", () => $("#code-input"));
-    const key = text(".panel-body strong");
-    must(key.length >= 32, "no setup key shown");
-    fill("code-input", await totp(key));
-    await click("[data-action=loginCode]");
+    // A release build asks for the second step (its setup at the first
+    // sign-in, with the QR code); a debug build signs in at once
+    await wait("the second step or the first page", () => $("#code-input") || titled("Nodes")());
+    if ($("#code-input")) {
+      const key = text(".panel-body strong");
+      must(key.length >= 32, "no setup key shown");
+      must($(".setup-qr svg"), "no QR code shown");
+      fill("code-input", await totp(key));
+      await click("[data-action=loginCode]");
+    }
     await wait("the first page", titled("Nodes"));
 
     step = "pages";

@@ -91,7 +91,7 @@ pub fn init(auth: *auth_mod.Auth, a: std.mem.Allocator, token: ?[]const u8, now:
         .null;
     return try std.json.Stringify.valueAlloc(a, .{
         .user = user,
-        .second_step = auth_mod.second_step,
+        .second_step = auth.second_step,
         .messages = &[_]Message{},
     }, .{});
 }

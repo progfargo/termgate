@@ -129,11 +129,14 @@ pub fn build(b: *std.Build) void {
             .{ .name = "users", .module = users_module },
         },
     });
-    // -Dsecond-step=false: signing in takes the password only, no code
-    // from an authenticator app. For trying the panel quickly; termgate
-    // says so when it starts. Without the option the second step is on.
+    // The second step (a code from an authenticator app) at sign-in: off in
+    // a debug build (local use and tests: name and password only), always
+    // on in a release build (the one installed on a server). As with
+    // another earlier project's TLS. -Dsecond-step=true|false overrides it.
     const server_options = b.addOptions();
-    server_options.addOption(bool, "second_step", b.option(bool, "second-step", "Ask for the authenticator code at sign-in (default true; false only for trying the panel)") orelse true);
+    server_options.addOption(bool, "second_step", b.option(bool, "second-step", "Ask for the authenticator code at sign-in (default: on in release builds, off in debug builds)") orelse (optimize != .debug));
+    // QR codes of the second step's setup key (vendor/qrcodegen)
+    server_module.addCSourceFile(.{ .file = b.path("vendor/qrcodegen/qrcodegen.c"), .flags = &.{ "-std=c99", "-DNDEBUG" } });
     server_module.addOptions("build_options", server_options);
     const server_exe = b.addExecutable(.{ .name = "termgate", .root_module = server_module });
     b.installArtifact(server_exe);
